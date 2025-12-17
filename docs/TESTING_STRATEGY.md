@@ -31,7 +31,6 @@ projects. This approach had significant issues:
    scripts to generate test projects
 4. **False Confidence**: Tests passing on synthetic projects doesn't mean they
    work on real codebases
-5. **Annotation Noise**: Generated warnings and errors for incomplete extractor implementations
 
 ### Benefits of Real-World Testing
 
