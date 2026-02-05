@@ -279,8 +279,13 @@ func stripMesonComments(content string) string {
 				inString = true
 				stringChar = ch
 			} else if inString && ch == stringChar {
-				// Check for escape
-				if i > 0 && line[i-1] != '\\' {
+				// Determine if this quote is escaped by counting consecutive backslashes before it.
+				backslashCount := 0
+				for j := i - 1; j >= 0 && line[j] == '\\'; j-- {
+					backslashCount++
+				}
+				// Only treat the quote as closing the string if there is an even number of backslashes.
+				if backslashCount%2 == 0 {
 					inString = false
 				}
 			} else if !inString && ch == '#' {

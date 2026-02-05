@@ -265,6 +265,10 @@ dependency('actual-lib')
 shared_library('reallib', 'lib.cpp')
 
 msg = 'This string has a # hash inside'  # but this is a comment
+
+# Test escaped backslashes - the string ends after \\ because the backslash is escaped
+path1 = 'C:\\path\\'  # This comment should be stripped
+path2 = "text\\\\"  # The string ends correctly, this is a comment
 `
 
 	tmpDir := t.TempDir()
@@ -298,6 +302,51 @@ msg = 'This string has a # hash inside'  # but this is a comment
 	assert.Len(t, deps, 1)
 	assert.Contains(t, deps, "actual-lib")
 	assert.NotContains(t, deps, "obsolete-lib")
+}
+
+func TestStripMesonCommentsEscapedBackslashes(t *testing.T) {
+	// Test that escaped backslashes are handled correctly
+	// Note: stripMesonComments always adds a trailing newline due to strings.Split behavior
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "simple string with hash",
+			input:    "msg = 'test # not a comment'  # real comment",
+			expected: "msg = 'test # not a comment'  \n",
+		},
+		{
+			name:     "escaped backslash before quote",
+			input:    "path = 'C:\\\\path\\\\'  # comment",
+			expected: "path = 'C:\\\\path\\\\'  \n",
+		},
+		{
+			name:     "double escaped backslash",
+			input:    "s = \"text\\\\\\\\\"  # comment",
+			expected: "s = \"text\\\\\\\\\"  \n",
+		},
+		{
+			name:     "single backslash escapes quote",
+			input:    "s = 'don\\'t stop'  # comment",
+			expected: "s = 'don\\'t stop'  \n",
+		},
+		{
+			name:  "odd backslashes keep string open",
+			input: "s = 'path\\\\\\' # still in string'  # real comment",
+			// With odd backslashes (3), the middle quote is escaped, so string stays open
+			// until the next unescaped quote. The first # is inside the string.
+			expected: "s = 'path\\\\\\' # still in string'  \n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripMesonComments(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }
 
 func TestExtractFromAutotools(t *testing.T) {
