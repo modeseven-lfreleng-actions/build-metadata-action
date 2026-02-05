@@ -352,7 +352,12 @@ func filterRelevantTools(projectType string, allTools map[string]string) map[str
 	// Filter based on project type
 	switch {
 	case strings.HasPrefix(projectType, "python"):
-		for _, tool := range []string{"python3", "pip"} {
+		// Note: We intentionally exclude python3 here because:
+		// 1. The "Build Python" field already shows the recommended version from project metadata
+		// 2. The detected python3 version is the system Python, not the matrix job's Python
+		// 3. build-metadata-action runs BEFORE setup-python, so the detected version is misleading
+		// Only show pip version as it may be relevant for dependency installation
+		for _, tool := range []string{"pip"} {
 			if version, ok := allTools[tool]; ok {
 				relevant[tool] = version
 			}

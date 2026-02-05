@@ -264,17 +264,61 @@ func (e *Extractor) extractFromQmake(path string, metadata *extractor.ProjectMet
 	return scanner.Err()
 }
 
+// stripMesonComments removes single-line comments from Meson build file content.
+// Meson uses # for comments, similar to Python.
+func stripMesonComments(content string) string {
+	var result strings.Builder
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		// Find comment start (# not inside a string)
+		inString := false
+		stringChar := rune(0)
+		commentStart := -1
+		for i, ch := range line {
+			if !inString && (ch == '\'' || ch == '"') {
+				inString = true
+				stringChar = ch
+			} else if inString && ch == stringChar {
+				// Determine if this quote is escaped by counting consecutive backslashes before it.
+				backslashCount := 0
+				for j := i - 1; j >= 0 && line[j] == '\\'; j-- {
+					backslashCount++
+				}
+				// Only treat the quote as closing the string if there is an even number of backslashes.
+				if backslashCount%2 == 0 {
+					inString = false
+				}
+			} else if !inString && ch == '#' {
+				commentStart = i
+				break
+			}
+		}
+		if commentStart >= 0 {
+			result.WriteString(line[:commentStart])
+		} else {
+			result.WriteString(line)
+		}
+		result.WriteString("\n")
+	}
+	return result.String()
+}
+
 // extractFromMeson parses meson.build
 func (e *Extractor) extractFromMeson(path string, metadata *extractor.ProjectMetadata) error {
-	file, err := os.Open(path)
+	// Read entire file to handle multi-line project() declarations
+	content, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
+	// Strip comments before applying regex patterns to avoid matching commented code
+	fileContent := stripMesonComments(string(content))
 
-	projectRegex := regexp.MustCompile(`project\s*\(\s*'([^']+)'(?:.*version\s*:\s*'([^']+)')?`)
+	// Regex for project name - matches project('name', ...)
+	projectNameRegex := regexp.MustCompile(`project\s*\(\s*'([^']+)'`)
+	// Regex for version - can be on same line or different line within project()
+	// Use (?s) for DOTALL mode to match across newlines
+	projectVersionRegex := regexp.MustCompile(`(?s)project\s*\([^)]*version\s*:\s*'([^']+)'`)
 	executableRegex := regexp.MustCompile(`executable\s*\(\s*'([^']+)'`)
 	libraryRegex := regexp.MustCompile(`(?:shared_|static_)?library\s*\(\s*'([^']+)'`)
 	dependencyRegex := regexp.MustCompile(`dependency\s*\(\s*'([^']+)'`)
@@ -283,32 +327,38 @@ func (e *Extractor) extractFromMeson(path string, metadata *extractor.ProjectMet
 	var libraries []string
 	var dependencies []string
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		line = strings.TrimSpace(line)
+	// Extract project name
+	if matches := projectNameRegex.FindStringSubmatch(fileContent); matches != nil {
+		metadata.Name = matches[1]
+	}
 
-		if strings.HasPrefix(line, "#") {
-			continue
+	// Extract version (handles multi-line project declarations)
+	if matches := projectVersionRegex.FindStringSubmatch(fileContent); matches != nil {
+		metadata.Version = matches[1]
+		metadata.VersionSource = "meson.build"
+	}
+
+	// Extract executables
+	execMatches := executableRegex.FindAllStringSubmatch(fileContent, -1)
+	for _, match := range execMatches {
+		if len(match) > 1 {
+			executables = append(executables, match[1])
 		}
+	}
 
-		if matches := projectRegex.FindStringSubmatch(line); matches != nil {
-			metadata.Name = matches[1]
-			if len(matches) > 2 && matches[2] != "" {
-				metadata.Version = matches[2]
-				metadata.VersionSource = "meson.build"
-			}
+	// Extract libraries
+	libMatches := libraryRegex.FindAllStringSubmatch(fileContent, -1)
+	for _, match := range libMatches {
+		if len(match) > 1 {
+			libraries = append(libraries, match[1])
 		}
+	}
 
-		if matches := executableRegex.FindStringSubmatch(line); matches != nil {
-			executables = append(executables, matches[1])
-		}
-
-		if matches := libraryRegex.FindStringSubmatch(line); matches != nil {
-			libraries = append(libraries, matches[1])
-		}
-
-		if matches := dependencyRegex.FindStringSubmatch(line); matches != nil {
-			dependencies = append(dependencies, matches[1])
+	// Extract dependencies
+	depMatches := dependencyRegex.FindAllStringSubmatch(fileContent, -1)
+	for _, match := range depMatches {
+		if len(match) > 1 {
+			dependencies = append(dependencies, match[1])
 		}
 	}
 
@@ -323,7 +373,7 @@ func (e *Extractor) extractFromMeson(path string, metadata *extractor.ProjectMet
 		metadata.LanguageSpecific["dependency_count"] = len(dependencies)
 	}
 
-	return scanner.Err()
+	return nil
 }
 
 // extractFromAutotools parses configure.ac

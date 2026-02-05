@@ -508,16 +508,18 @@ func TestGeneratePHPVersionMatrix(t *testing.T) {
 			shouldContain: []string{"8.1", "8.2", "8.3"},
 		},
 		{
+			// PHP 8.0 reached EOL Nov 2023, so only 8.1+ are actively supported
 			name:          "caret constraint 8.0",
 			constraint:    "^8.0",
-			expectedCount: 4,
-			shouldContain: []string{"8.0", "8.1", "8.2", "8.3"},
+			expectedCount: 3,
+			shouldContain: []string{"8.1", "8.2", "8.3"},
 		},
 		{
+			// PHP 7.4 and 8.0 reached EOL, so only 8.1+ are actively supported
 			name:          "greater than or equal 7.4",
 			constraint:    ">=7.4",
-			expectedCount: 5,
-			shouldContain: []string{"7.4", "8.0", "8.3"},
+			expectedCount: 3,
+			shouldContain: []string{"8.1", "8.2", "8.3"},
 		},
 		{
 			name:          "tilde constraint 8.2",

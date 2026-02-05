@@ -90,7 +90,8 @@ func (e *Extractor) extractFromMixExs(path string, metadata *extractor.ProjectMe
 	versionRegex := regexp.MustCompile(`version:\s*"([^"]+)"`)
 	elixirRegex := regexp.MustCompile(`elixir:\s*"([^"]+)"`)
 	descriptionRegex := regexp.MustCompile(`description:\s*"([^"]+)"`)
-	packageRegex := regexp.MustCompile(`package:\s*\[`)
+	packageBlockRegex := regexp.MustCompile(`package:\s*\[`)
+	packageFuncRegex := regexp.MustCompile(`defp\s+package\s+do`)
 	licenseRegex := regexp.MustCompile(`licenses:\s*\["([^"]+)"`)
 	linksRegex := regexp.MustCompile(`links:\s*%\{`)
 	homepageRegex := regexp.MustCompile(`"([^"]+)"\s*=>\s*"([^"]+)"`)
@@ -131,8 +132,8 @@ func (e *Extractor) extractFromMixExs(path string, metadata *extractor.ProjectMe
 			metadata.Description = matches[1]
 		}
 
-		// Track package block
-		if packageRegex.MatchString(line) {
+		// Track package block (either inline or via defp package do function)
+		if packageBlockRegex.MatchString(line) || packageFuncRegex.MatchString(line) {
 			inPackageBlock = true
 		}
 

@@ -247,6 +247,108 @@ dependency('libcurl')
 	assert.Contains(t, deps, "libcurl")
 }
 
+func TestExtractFromMesonWithComments(t *testing.T) {
+	// Test that comments are properly stripped and don't interfere with extraction
+	mesonContent := `# This is a comment mentioning project('fake', version: '0.0.0')
+project('realapp', 'cpp',
+  version: '2.0.0',
+  default_options: ['warning_level=3'])
+
+# executable('commented_out', 'old.cpp')
+executable('realexe', 'main.cpp')
+
+# Old dependency that should be ignored:
+# dependency('obsolete-lib')
+dependency('actual-lib')
+
+# Note: library('fake') is not real
+shared_library('reallib', 'lib.cpp')
+
+msg = 'This string has a # hash inside'  # but this is a comment
+
+# Test escaped backslashes - the string ends after \\ because the backslash is escaped
+path1 = 'C:\\path\\'  # This comment should be stripped
+path2 = "text\\\\"  # The string ends correctly, this is a comment
+`
+
+	tmpDir := t.TempDir()
+	mesonPath := filepath.Join(tmpDir, "meson.build")
+	err := os.WriteFile(mesonPath, []byte(mesonContent), 0644)
+	require.NoError(t, err)
+
+	e := NewExtractor()
+	metadata, err := e.Extract(tmpDir)
+	require.NoError(t, err)
+	require.NotNil(t, metadata)
+
+	// Should extract the real project, not the one in comments
+	assert.Equal(t, "realapp", metadata.Name)
+	assert.Equal(t, "2.0.0", metadata.Version)
+	assert.Equal(t, "meson.build", metadata.VersionSource)
+
+	// Should only have the real executable, not commented ones
+	execs := metadata.LanguageSpecific["executables"].([]string)
+	assert.Len(t, execs, 1)
+	assert.Contains(t, execs, "realexe")
+	assert.NotContains(t, execs, "commented_out")
+
+	// Should only have the real library
+	libs := metadata.LanguageSpecific["libraries"].([]string)
+	assert.Len(t, libs, 1)
+	assert.Contains(t, libs, "reallib")
+
+	// Should only have the real dependency, not commented ones
+	deps := metadata.LanguageSpecific["dependencies"].([]string)
+	assert.Len(t, deps, 1)
+	assert.Contains(t, deps, "actual-lib")
+	assert.NotContains(t, deps, "obsolete-lib")
+}
+
+func TestStripMesonCommentsEscapedBackslashes(t *testing.T) {
+	// Test that escaped backslashes are handled correctly
+	// Note: stripMesonComments always adds a trailing newline due to strings.Split behavior
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "simple string with hash",
+			input:    "msg = 'test # not a comment'  # real comment",
+			expected: "msg = 'test # not a comment'  \n",
+		},
+		{
+			name:     "escaped backslash before quote",
+			input:    "path = 'C:\\\\path\\\\'  # comment",
+			expected: "path = 'C:\\\\path\\\\'  \n",
+		},
+		{
+			name:     "double escaped backslash",
+			input:    "s = \"text\\\\\\\\\"  # comment",
+			expected: "s = \"text\\\\\\\\\"  \n",
+		},
+		{
+			name:     "single backslash escapes quote",
+			input:    "s = 'don\\'t stop'  # comment",
+			expected: "s = 'don\\'t stop'  \n",
+		},
+		{
+			name:  "odd backslashes keep string open",
+			input: "s = 'path\\\\\\' # still in string'  # real comment",
+			// With odd backslashes (3), the middle quote is escaped, so string stays open
+			// until the next unescaped quote. The first # is inside the string.
+			expected: "s = 'path\\\\\\' # still in string'  \n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripMesonComments(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestExtractFromAutotools(t *testing.T) {
 	autotoolsContent := `AC_INIT([mytool], [2.3.1])
 AC_CONFIG_SRCDIR([src/main.c])

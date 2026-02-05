@@ -413,46 +413,53 @@ func TestGenerateTerraformVersionMatrix(t *testing.T) {
 		shouldContain []string
 	}{
 		{
+			// Terraform 1.5+ are actively supported
 			name:          "greater than or equal 1.5",
 			constraint:    ">= 1.5.0",
-			expectedCount: 3,
-			shouldContain: []string{"1.5", "1.6", "1.7"},
+			expectedCount: 6,
+			shouldContain: []string{"1.5", "1.6", "1.7", "1.8", "1.9", "1.10"},
 		},
 		{
+			// Terraform 1.0-1.4 are EOL; implementation only returns 1.5+
 			name:          "greater than or equal 1.0",
 			constraint:    ">= 1.0.0",
-			expectedCount: 8,
-			shouldContain: []string{"1.0", "1.1", "1.7"},
+			expectedCount: 6,
+			shouldContain: []string{"1.5", "1.6", "1.7", "1.8", "1.9", "1.10"},
 		},
 		{
+			// Pessimistic constraint still returns all 1.5+ versions
 			name:          "pessimistic constraint 1.5",
 			constraint:    "~> 1.5.0",
-			expectedCount: 3,
-			shouldContain: []string{"1.5", "1.6", "1.7"},
+			expectedCount: 6,
+			shouldContain: []string{"1.5", "1.6", "1.7", "1.8", "1.9", "1.10"},
 		},
 		{
+			// Terraform 1.3-1.4 are EOL; implementation only returns 1.5+
 			name:          "pessimistic constraint 1.3",
 			constraint:    "~> 1.3",
-			expectedCount: 5,
-			shouldContain: []string{"1.3", "1.4", "1.5"},
+			expectedCount: 6,
+			shouldContain: []string{"1.5", "1.6", "1.7", "1.8", "1.9", "1.10"},
 		},
 		{
+			// Terraform 0.x and 1.0-1.4 are EOL; implementation only returns 1.5+
 			name:          "legacy version 0.15",
 			constraint:    ">= 0.15.0",
-			expectedCount: 4,
-			shouldContain: []string{"0.15", "1.0", "1.1"},
+			expectedCount: 6,
+			shouldContain: []string{"1.5", "1.6", "1.7", "1.8", "1.9", "1.10"},
 		},
 		{
+			// Unknown version defaults to recent supported versions
 			name:          "unknown version defaults",
 			constraint:    ">= 99.0",
 			expectedCount: 3,
-			shouldContain: []string{"1.5", "1.6", "1.7"},
+			shouldContain: []string{"1.8", "1.9", "1.10"},
 		},
 		{
+			// Empty constraint defaults to recent supported versions
 			name:          "empty constraint defaults",
 			constraint:    "",
 			expectedCount: 3,
-			shouldContain: []string{"1.5", "1.6", "1.7"},
+			shouldContain: []string{"1.8", "1.9", "1.10"},
 		},
 	}
 

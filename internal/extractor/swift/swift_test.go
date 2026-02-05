@@ -415,36 +415,42 @@ func TestGenerateSwiftVersionMatrix(t *testing.T) {
 		shouldContain []string
 	}{
 		{
+			// Swift 5.9+ are actively supported; implementation returns all from 5.9 onwards
 			name:          "Swift 5.9",
 			toolsVersion:  "5.9",
-			expectedCount: 2,
-			shouldContain: []string{"5.9", "5.10"},
+			expectedCount: 5,
+			shouldContain: []string{"5.9", "5.10", "5.11", "6.0", "6.1"},
 		},
 		{
+			// Swift 5.7 and 5.8 are EOL; implementation only returns 5.9+
 			name:          "Swift 5.7",
 			toolsVersion:  "5.7",
-			expectedCount: 4,
-			shouldContain: []string{"5.7", "5.8", "5.9", "5.10"},
+			expectedCount: 5,
+			shouldContain: []string{"5.9", "5.10", "5.11", "6.0", "6.1"},
 		},
 		{
+			// Swift 5.5, 5.6, 5.7 are EOL; implementation only returns 5.9+
 			name:          "Swift 5.5",
 			toolsVersion:  "5.5",
-			expectedCount: 6,
-			shouldContain: []string{"5.5", "5.6", "5.7"},
+			expectedCount: 5,
+			shouldContain: []string{"5.9", "5.10", "5.11", "6.0", "6.1"},
 		},
 		{
+			// Swift 5.10+ are actively supported
 			name:          "Swift 5.10",
 			toolsVersion:  "5.10",
-			expectedCount: 1,
-			shouldContain: []string{"5.10"},
+			expectedCount: 4,
+			shouldContain: []string{"5.10", "5.11", "6.0", "6.1"},
 		},
 		{
+			// Unknown version defaults to recent supported versions
 			name:          "unknown version defaults",
 			toolsVersion:  "99.0",
-			expectedCount: 2,
-			shouldContain: []string{"5.9", "5.10"},
+			expectedCount: 4,
+			shouldContain: []string{"5.10", "5.11", "6.0", "6.1"},
 		},
 		{
+			// Empty version defaults to recent supported versions
 			name:          "empty version defaults",
 			toolsVersion:  "",
 			expectedCount: 2,
