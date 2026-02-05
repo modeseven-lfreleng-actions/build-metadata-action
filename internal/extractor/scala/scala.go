@@ -123,11 +123,16 @@ func (e *Extractor) extractFromBuildSbt(path string, metadata *extractor.Project
 	organizationRegex := regexp.MustCompile(`organization\s*:=\s*"([^"]+)"`)
 	descriptionRegex := regexp.MustCompile(`description\s*:=\s*"([^"]+)"`)
 	homepageRegex := regexp.MustCompile(`homepage\s*:=\s*Some\(url\("([^"]+)"\)\)`)
-	licenseRegex := regexp.MustCompile(`licenses\s*:=\s*Seq\(.*"([^"]+)"`)
+	// Match license name (first quoted string) in format: licenses := Seq("Apache-2.0" -> url("..."))
+	licenseRegex := regexp.MustCompile(`licenses\s*:=\s*Seq\(\s*"([^"]+)"`)
+	// Match dependencies on same line as libraryDependencies
 	libraryDependencyRegex := regexp.MustCompile(`libraryDependencies\s*\+\+?=\s*(?:Seq\()?\s*"([^"]+)"\s*%+\s*"([^"]+)"\s*%\s*"([^"]+)"`)
+	// Match standalone dependency lines within Seq block: "org" %% "name" % "version"
+	standaloneDependencyRegex := regexp.MustCompile(`^\s*"([^"]+)"\s*%%?\s*"([^"]+)"\s*%\s*"([^"]+)"`)
 
 	var dependencies []string
 	var scalaVersion string
+	var inLibraryDependencies bool
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -170,6 +175,23 @@ func (e *Extractor) extractFromBuildSbt(path string, metadata *extractor.Project
 		if matches := libraryDependencyRegex.FindStringSubmatch(line); matches != nil {
 			dep := fmt.Sprintf("%s:%s:%s", matches[1], matches[2], matches[3])
 			dependencies = append(dependencies, dep)
+		}
+
+		// Track when we enter libraryDependencies block
+		if strings.Contains(line, "libraryDependencies") && strings.Contains(line, "Seq(") {
+			inLibraryDependencies = true
+		}
+
+		// Extract dependencies from standalone lines within Seq block
+		if inLibraryDependencies {
+			if matches := standaloneDependencyRegex.FindStringSubmatch(line); matches != nil {
+				dep := fmt.Sprintf("%s:%s:%s", matches[1], matches[2], matches[3])
+				dependencies = append(dependencies, dep)
+			}
+			// End of Seq block
+			if strings.Contains(line, ")") && !strings.Contains(line, "Seq(") {
+				inLibraryDependencies = false
+			}
 		}
 	}
 
@@ -221,7 +243,9 @@ func (e *Extractor) extractFromMill(path string, metadata *extractor.ProjectMeta
 
 	objectRegex := regexp.MustCompile(`object\s+(\w+)\s+extends`)
 	scalaVersionRegex := regexp.MustCompile(`def\s+scalaVersion\s*=\s*"([^"]+)"`)
-	ivyDepRegex := regexp.MustCompile(`ivy"([^:]+):([^:]+):([^"]+)"`)
+	// Match ivy dependencies with both : and :: (Scala cross-version) syntax
+	// e.g., ivy"com.lihaoyi::upickle:3.1.3" or ivy"org.example:artifact:1.0"
+	ivyDepRegex := regexp.MustCompile(`ivy"([^:]+)::?([^:]+):([^"]+)"`)
 
 	var dependencies []string
 	var scalaVersion string

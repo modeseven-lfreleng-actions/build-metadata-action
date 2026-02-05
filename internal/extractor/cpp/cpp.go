@@ -266,15 +266,19 @@ func (e *Extractor) extractFromQmake(path string, metadata *extractor.ProjectMet
 
 // extractFromMeson parses meson.build
 func (e *Extractor) extractFromMeson(path string, metadata *extractor.ProjectMetadata) error {
-	file, err := os.Open(path)
+	// Read entire file to handle multi-line project() declarations
+	content, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
+	fileContent := string(content)
 
-	projectRegex := regexp.MustCompile(`project\s*\(\s*'([^']+)'(?:.*version\s*:\s*'([^']+)')?`)
+	// Regex for project name - matches project('name', ...)
+	projectNameRegex := regexp.MustCompile(`project\s*\(\s*'([^']+)'`)
+	// Regex for version - can be on same line or different line within project()
+	// Use (?s) for DOTALL mode to match across newlines
+	projectVersionRegex := regexp.MustCompile(`(?s)project\s*\([^)]*version\s*:\s*'([^']+)'`)
 	executableRegex := regexp.MustCompile(`executable\s*\(\s*'([^']+)'`)
 	libraryRegex := regexp.MustCompile(`(?:shared_|static_)?library\s*\(\s*'([^']+)'`)
 	dependencyRegex := regexp.MustCompile(`dependency\s*\(\s*'([^']+)'`)
@@ -283,32 +287,38 @@ func (e *Extractor) extractFromMeson(path string, metadata *extractor.ProjectMet
 	var libraries []string
 	var dependencies []string
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		line = strings.TrimSpace(line)
+	// Extract project name
+	if matches := projectNameRegex.FindStringSubmatch(fileContent); matches != nil {
+		metadata.Name = matches[1]
+	}
 
-		if strings.HasPrefix(line, "#") {
-			continue
+	// Extract version (handles multi-line project declarations)
+	if matches := projectVersionRegex.FindStringSubmatch(fileContent); matches != nil {
+		metadata.Version = matches[1]
+		metadata.VersionSource = "meson.build"
+	}
+
+	// Extract executables
+	execMatches := executableRegex.FindAllStringSubmatch(fileContent, -1)
+	for _, match := range execMatches {
+		if len(match) > 1 {
+			executables = append(executables, match[1])
 		}
+	}
 
-		if matches := projectRegex.FindStringSubmatch(line); matches != nil {
-			metadata.Name = matches[1]
-			if len(matches) > 2 && matches[2] != "" {
-				metadata.Version = matches[2]
-				metadata.VersionSource = "meson.build"
-			}
+	// Extract libraries
+	libMatches := libraryRegex.FindAllStringSubmatch(fileContent, -1)
+	for _, match := range libMatches {
+		if len(match) > 1 {
+			libraries = append(libraries, match[1])
 		}
+	}
 
-		if matches := executableRegex.FindStringSubmatch(line); matches != nil {
-			executables = append(executables, matches[1])
-		}
-
-		if matches := libraryRegex.FindStringSubmatch(line); matches != nil {
-			libraries = append(libraries, matches[1])
-		}
-
-		if matches := dependencyRegex.FindStringSubmatch(line); matches != nil {
-			dependencies = append(dependencies, matches[1])
+	// Extract dependencies
+	depMatches := dependencyRegex.FindAllStringSubmatch(fileContent, -1)
+	for _, match := range depMatches {
+		if len(match) > 1 {
+			dependencies = append(dependencies, match[1])
 		}
 	}
 
@@ -323,7 +333,7 @@ func (e *Extractor) extractFromMeson(path string, metadata *extractor.ProjectMet
 		metadata.LanguageSpecific["dependency_count"] = len(dependencies)
 	}
 
-	return scanner.Err()
+	return nil
 }
 
 // extractFromAutotools parses configure.ac
