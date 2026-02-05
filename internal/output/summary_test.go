@@ -85,6 +85,7 @@ func TestGenerateSummary_CompleteMetadata(t *testing.T) {
 			"requires_python": ">=3.8",
 			"build_backend":   "hatchling.build",
 			"metadata_source": "pyproject.toml",
+			"build_version":   "3.11",
 		},
 	}
 
@@ -143,8 +144,16 @@ func TestGenerateSummary_CompleteMetadata(t *testing.T) {
 	}
 
 	// Check relevant tools are listed (Python-specific)
-	if !strings.Contains(summary, "3.11.0") {
-		t.Error("Should contain Python version in Project Information")
+	// Note: python3 is intentionally excluded from summary for Python projects because:
+	// 1. The "Build Python" field shows the recommended version from project metadata
+	// 2. The detected python3 version is the system Python, not the matrix job's Python
+	// 3. build-metadata-action runs BEFORE setup-python, so the detected version is misleading
+	// We check for pip instead, and Build Python should show the version from metadata
+	if !strings.Contains(summary, "23.0.1") {
+		t.Error("Should contain pip version in Project Information")
+	}
+	if !strings.Contains(summary, "Build Python") {
+		t.Error("Should contain Build Python field from language_specific metadata")
 	}
 
 	// Language-specific metadata should be in Project Information table
@@ -451,8 +460,12 @@ func TestGenerateSummary_DynamicVersioning(t *testing.T) {
 	}
 }
 
-// TestGenerateSummary_ToolVersionsSorting tests that tools are sorted alphabetically
-func TestGenerateSummary_ToolVersionsSorting(t *testing.T) {
+// TestGenerateSummary_ToolVersionsForPython tests that Python projects show pip but not python3
+// python3 is excluded because:
+// 1. The "Build Python" field already shows the recommended version from project metadata
+// 2. The detected python3 version is the system Python, not the matrix job's Python
+// 3. build-metadata-action runs BEFORE setup-python, so the detected version is misleading
+func TestGenerateSummary_ToolVersionsForPython(t *testing.T) {
 	metadata := map[string]interface{}{
 		"common": map[string]interface{}{
 			"project_type":    "python-modern",
@@ -470,17 +483,16 @@ func TestGenerateSummary_ToolVersionsSorting(t *testing.T) {
 
 	summary := GenerateSummary(metadata)
 
-	// Find positions of tools in summary
+	// pip should be present
 	pipPos := strings.Index(summary, "pip Version")
-	python3Pos := strings.Index(summary, "Python 3 Version")
-
-	if pipPos == -1 || python3Pos == -1 {
-		t.Errorf("Python-relevant tools should be present in summary\nGot: %s", summary)
+	if pipPos == -1 {
+		t.Errorf("pip Version should be present in summary\nGot: %s", summary)
 	}
 
-	// Check alphabetical ordering (pip comes before python3 alphabetically)
-	if !(pipPos < python3Pos) {
-		t.Errorf("Tools should be sorted alphabetically\npip position: %d, python3 position: %d\nGot: %s", pipPos, python3Pos, summary)
+	// python3 should NOT be present (it's misleading for matrix jobs)
+	python3Pos := strings.Index(summary, "Python 3 Version")
+	if python3Pos != -1 {
+		t.Errorf("Python 3 Version should NOT be present in summary for Python projects (misleading for matrix jobs)\nGot: %s", summary)
 	}
 }
 
