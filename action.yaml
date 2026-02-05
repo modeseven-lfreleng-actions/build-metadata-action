@@ -316,7 +316,8 @@ runs:
         TEMP_BIN_DIR="$(mktemp -d)"
         # Build the binary to temporary location
         cd "${{ github.action_path }}"
-        go build -o "${TEMP_BIN_DIR}/build-metadata" ./cmd/build-metadata
+        go build -buildvcs=false \
+          -o "${TEMP_BIN_DIR}/build-metadata" ./cmd/build-metadata
         # Return to the original working directory
         cd "${ORIGINAL_DIR}"
         echo "::endgroup::"
