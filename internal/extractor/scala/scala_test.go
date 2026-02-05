@@ -128,6 +128,34 @@ libraryDependencies ++= Seq(
 	assert.Equal(t, 2, metadata.LanguageSpecific["dependency_count"])
 }
 
+func TestExtractFromBuildSbtSingleLineSeq(t *testing.T) {
+	// Test that dependencies on the same line as libraryDependencies with Seq are not duplicated
+	buildSbtContent := `name := "single-line-test"
+
+scalaVersion := "2.13.12"
+
+libraryDependencies ++= Seq("org.typelevel" %% "cats-core" % "2.10.0")
+`
+
+	tmpDir := t.TempDir()
+	buildSbtPath := filepath.Join(tmpDir, "build.sbt")
+	err := os.WriteFile(buildSbtPath, []byte(buildSbtContent), 0644)
+	require.NoError(t, err)
+
+	e := NewExtractor()
+	metadata, err := e.Extract(tmpDir)
+	require.NoError(t, err)
+	require.NotNil(t, metadata)
+
+	assert.Equal(t, "single-line-test", metadata.Name)
+
+	deps := metadata.LanguageSpecific["dependencies"].([]string)
+	// Should have exactly 1 dependency, not 2 (no duplicates)
+	assert.Len(t, deps, 1)
+	assert.Contains(t, deps, "org.typelevel:cats-core:2.10.0")
+	assert.Equal(t, 1, metadata.LanguageSpecific["dependency_count"])
+}
+
 func TestExtractFromBuildSbtMinimal(t *testing.T) {
 	buildSbtContent := `name := "minimal-project"
 scalaVersion := "3.3.1"

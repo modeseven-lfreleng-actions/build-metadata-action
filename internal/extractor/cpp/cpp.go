@@ -264,6 +264,40 @@ func (e *Extractor) extractFromQmake(path string, metadata *extractor.ProjectMet
 	return scanner.Err()
 }
 
+// stripMesonComments removes single-line comments from Meson build file content.
+// Meson uses # for comments, similar to Python.
+func stripMesonComments(content string) string {
+	var result strings.Builder
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		// Find comment start (# not inside a string)
+		inString := false
+		stringChar := rune(0)
+		commentStart := -1
+		for i, ch := range line {
+			if !inString && (ch == '\'' || ch == '"') {
+				inString = true
+				stringChar = ch
+			} else if inString && ch == stringChar {
+				// Check for escape
+				if i > 0 && line[i-1] != '\\' {
+					inString = false
+				}
+			} else if !inString && ch == '#' {
+				commentStart = i
+				break
+			}
+		}
+		if commentStart >= 0 {
+			result.WriteString(line[:commentStart])
+		} else {
+			result.WriteString(line)
+		}
+		result.WriteString("\n")
+	}
+	return result.String()
+}
+
 // extractFromMeson parses meson.build
 func (e *Extractor) extractFromMeson(path string, metadata *extractor.ProjectMetadata) error {
 	// Read entire file to handle multi-line project() declarations
@@ -272,7 +306,8 @@ func (e *Extractor) extractFromMeson(path string, metadata *extractor.ProjectMet
 		return err
 	}
 
-	fileContent := string(content)
+	// Strip comments before applying regex patterns to avoid matching commented code
+	fileContent := stripMesonComments(string(content))
 
 	// Regex for project name - matches project('name', ...)
 	projectNameRegex := regexp.MustCompile(`project\s*\(\s*'([^']+)'`)

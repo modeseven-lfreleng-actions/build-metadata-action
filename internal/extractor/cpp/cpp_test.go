@@ -247,6 +247,59 @@ dependency('libcurl')
 	assert.Contains(t, deps, "libcurl")
 }
 
+func TestExtractFromMesonWithComments(t *testing.T) {
+	// Test that comments are properly stripped and don't interfere with extraction
+	mesonContent := `# This is a comment mentioning project('fake', version: '0.0.0')
+project('realapp', 'cpp',
+  version: '2.0.0',
+  default_options: ['warning_level=3'])
+
+# executable('commented_out', 'old.cpp')
+executable('realexe', 'main.cpp')
+
+# Old dependency that should be ignored:
+# dependency('obsolete-lib')
+dependency('actual-lib')
+
+# Note: library('fake') is not real
+shared_library('reallib', 'lib.cpp')
+
+msg = 'This string has a # hash inside'  # but this is a comment
+`
+
+	tmpDir := t.TempDir()
+	mesonPath := filepath.Join(tmpDir, "meson.build")
+	err := os.WriteFile(mesonPath, []byte(mesonContent), 0644)
+	require.NoError(t, err)
+
+	e := NewExtractor()
+	metadata, err := e.Extract(tmpDir)
+	require.NoError(t, err)
+	require.NotNil(t, metadata)
+
+	// Should extract the real project, not the one in comments
+	assert.Equal(t, "realapp", metadata.Name)
+	assert.Equal(t, "2.0.0", metadata.Version)
+	assert.Equal(t, "meson.build", metadata.VersionSource)
+
+	// Should only have the real executable, not commented ones
+	execs := metadata.LanguageSpecific["executables"].([]string)
+	assert.Len(t, execs, 1)
+	assert.Contains(t, execs, "realexe")
+	assert.NotContains(t, execs, "commented_out")
+
+	// Should only have the real library
+	libs := metadata.LanguageSpecific["libraries"].([]string)
+	assert.Len(t, libs, 1)
+	assert.Contains(t, libs, "reallib")
+
+	// Should only have the real dependency, not commented ones
+	deps := metadata.LanguageSpecific["dependencies"].([]string)
+	assert.Len(t, deps, 1)
+	assert.Contains(t, deps, "actual-lib")
+	assert.NotContains(t, deps, "obsolete-lib")
+}
+
 func TestExtractFromAutotools(t *testing.T) {
 	autotoolsContent := `AC_INIT([mytool], [2.3.1])
 AC_CONFIG_SRCDIR([src/main.c])

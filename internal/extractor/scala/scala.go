@@ -133,6 +133,7 @@ func (e *Extractor) extractFromBuildSbt(path string, metadata *extractor.Project
 	var dependencies []string
 	var scalaVersion string
 	var inLibraryDependencies bool
+	var parenDepth int // Track parenthesis depth for robust Seq block detection
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -180,6 +181,13 @@ func (e *Extractor) extractFromBuildSbt(path string, metadata *extractor.Project
 		// Track when we enter libraryDependencies block
 		if strings.Contains(line, "libraryDependencies") && strings.Contains(line, "Seq(") {
 			inLibraryDependencies = true
+			// Count initial parenthesis depth from this line
+			parenDepth = strings.Count(line, "(") - strings.Count(line, ")")
+			// If depth is already 0 or negative, it's a single-line declaration
+			if parenDepth <= 0 {
+				inLibraryDependencies = false
+			}
+			continue
 		}
 
 		// Extract dependencies from standalone lines within Seq block
@@ -188,9 +196,12 @@ func (e *Extractor) extractFromBuildSbt(path string, metadata *extractor.Project
 				dep := fmt.Sprintf("%s:%s:%s", matches[1], matches[2], matches[3])
 				dependencies = append(dependencies, dep)
 			}
-			// End of Seq block
-			if strings.Contains(line, ")") && !strings.Contains(line, "Seq(") {
+			// Update parenthesis depth for this line
+			parenDepth += strings.Count(line, "(") - strings.Count(line, ")")
+			// End of Seq block when we've closed all parentheses
+			if parenDepth <= 0 {
 				inLibraryDependencies = false
+				parenDepth = 0
 			}
 		}
 	}
