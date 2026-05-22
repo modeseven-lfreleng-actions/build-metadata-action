@@ -382,6 +382,31 @@ func TestGeneratePythonVersionMatrix(t *testing.T) {
 			requiresPython: "",
 			expected:       []string{"3.10", "3.11", "3.12", "3.13", "3.14"},
 		},
+		{
+			name:           ">=3.10,!=3.11",
+			requiresPython: ">=3.10,!=3.11",
+			expected:       []string{"3.10", "3.12", "3.13", "3.14"},
+		},
+		{
+			name:           "==3.12",
+			requiresPython: "==3.12",
+			expected:       []string{"3.12"},
+		},
+		{
+			name:           "^3.11 (poetry caret)",
+			requiresPython: "^3.11",
+			expected:       []string{"3.11", "3.12", "3.13", "3.14"},
+		},
+		{
+			name:           "==3.10.* (wildcard)",
+			requiresPython: "==3.10.*",
+			expected:       []string{"3.10"},
+		},
+		{
+			name:           ">=3.10,<3.13,!=3.11",
+			requiresPython: ">=3.10,<3.13,!=3.11",
+			expected:       []string{"3.10", "3.12"},
+		},
 	}
 
 	for _, tt := range tests {

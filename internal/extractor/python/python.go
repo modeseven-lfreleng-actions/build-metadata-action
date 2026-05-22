@@ -13,6 +13,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/lfreleng-actions/build-metadata-action/internal/extractor"
+	"github.com/lfreleng-actions/build-metadata-action/internal/pyversions"
 )
 
 // Extractor extracts metadata from Python projects
@@ -1238,111 +1239,23 @@ func extractSetupPyField(content, field string) string {
 // changes; the rest of the extractor follows.
 var supportedPythonVersions = []string{"3.10", "3.11", "3.12", "3.13", "3.14"}
 
-// generatePythonVersionMatrix generates a list of Python versions from a requires-python specifier
+// generatePythonVersionMatrix generates a list of Python versions from
+// a requires-python specifier.
+//
+// The function is a thin wrapper around `pyversions.ResolveVersions` so
+// build-metadata-action benefits from the full PEP 440 / Poetry caret
+// constraint solver that previously lived only in the dormant
+// `internal/pyversions` package. On any parse error or empty result we
+// fall back to the full supported set so callers always receive a
+// non-empty matrix.
 func generatePythonVersionMatrix(requiresPython string) []string {
-	// Common patterns: ">=3.8", ">=3.8,<4.0", "~=3.8", "<3.13,>=3.11", etc.
-	versions := []string{}
-
-	// Extract minimum version
-	minVersion := ""
-	if strings.Contains(requiresPython, ">=") {
-		re := regexp.MustCompile(`>=\s*(\d+\.\d+)`)
-		if matches := re.FindStringSubmatch(requiresPython); len(matches) > 1 {
-			minVersion = matches[1]
-		}
-	} else if strings.Contains(requiresPython, "~=") {
-		re := regexp.MustCompile(`~=\s*(\d+\.\d+)`)
-		if matches := re.FindStringSubmatch(requiresPython); len(matches) > 1 {
-			minVersion = matches[1]
-		}
+	if requiresPython == "" {
+		return append([]string(nil), supportedPythonVersions...)
 	}
-
-	// Extract maximum version(s). PEP 440 allows specifiers to combine
-	// multiple upper bounds (e.g. `>=3.10,<=3.12,<3.11`); collect every
-	// `<` and `<=` clause and pick the tightest. Ties (same version with
-	// both an exclusive and an inclusive form) resolve in favour of the
-	// exclusive bound since it is the stricter of the two.
-	boundsRe := regexp.MustCompile(`(<=?)\s*(\d+\.\d+)`)
-	maxVersion := ""
-	maxInclusive := false
-	maxSet := false
-	for _, m := range boundsRe.FindAllStringSubmatch(requiresPython, -1) {
-		if len(m) < 3 {
-			continue
-		}
-		inclusive := m[1] == "<="
-		v := m[2]
-		if !maxSet {
-			maxVersion = v
-			maxInclusive = inclusive
-			maxSet = true
-			continue
-		}
-		c := compareVersions(v, maxVersion)
-		switch {
-		case c < 0:
-			maxVersion = v
-			maxInclusive = inclusive
-		case c == 0 && !inclusive && maxInclusive:
-			// Same numeric version, exclusive wins over inclusive.
-			maxInclusive = false
-		}
+	versions, err := pyversions.ResolveVersions(requiresPython, supportedPythonVersions)
+	if err != nil || len(versions) == 0 {
+		return append([]string(nil), supportedPythonVersions...)
 	}
-
-	// maxAllows reports whether v satisfies the upper bound, accounting
-	// for whether the bound is exclusive (`<`) or inclusive (`<=`).
-	maxAllows := func(v string) bool {
-		if maxInclusive {
-			return compareVersions(v, maxVersion) <= 0
-		}
-		return compareVersions(v, maxVersion) < 0
-	}
-
-	// Map minimum version to supported versions. The slices are derived
-	// on the fly from `supportedPythonVersions` so adding (or retiring)
-	// a Python version only needs to be done in one place.
-	supportedVersions := map[string][]string{}
-	for i, v := range supportedPythonVersions {
-		supportedVersions[v] = append([]string(nil), supportedPythonVersions[i:]...)
-	}
-
-	if minVersion != "" {
-		if versionList, ok := supportedVersions[minVersion]; ok {
-			// Filter versions based on maximum constraint if present
-			if maxVersion != "" {
-				filteredVersions := []string{}
-				for _, v := range versionList {
-					if maxAllows(v) {
-						filteredVersions = append(filteredVersions, v)
-					}
-				}
-				versions = filteredVersions
-			} else {
-				versions = versionList
-			}
-		} else {
-			// Legacy / unsupported minimum version: route through to
-			// the full supported set, but continue to apply the maximum
-			// constraint (if any) so an upper bound like `<3.11` or
-			// `<=3.11` still trims the resulting matrix.
-			versions = append([]string(nil), supportedPythonVersions...)
-			if maxVersion != "" {
-				filtered := []string{}
-				for _, v := range versions {
-					if maxAllows(v) {
-						filtered = append(filtered, v)
-					}
-				}
-				versions = filtered
-			}
-		}
-	}
-
-	// If we couldn't determine, use a reasonable default
-	if len(versions) == 0 {
-		versions = append([]string(nil), supportedPythonVersions...)
-	}
-
 	return versions
 }
 
