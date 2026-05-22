@@ -428,24 +428,8 @@ func (e *Extractor) extractFromPyProject(path string, metadata *extractor.Projec
 	}
 	if effectiveRequires != "" {
 		fmt.Fprintf(os.Stderr, "[DEBUG] Generating matrix for requires_python: %q\n", effectiveRequires)
-		matrix := generatePythonVersionMatrix(effectiveRequires)
-		fmt.Fprintf(os.Stderr, "[DEBUG] Generated matrix: %v (len=%d)\n", matrix, len(matrix))
-		if len(matrix) > 0 {
-			metadata.LanguageSpecific["version_matrix"] = matrix
-
-			// Convert to JSON for easy use in GitHub Actions
-			matrixJSON := fmt.Sprintf(`{"python-version": [%s]}`,
-				strings.Join(quoteStrings(matrix), ", "))
-			metadata.LanguageSpecific["matrix_json"] = matrixJSON
-
-			// Set recommended build version (latest from matrix)
-			metadata.LanguageSpecific["build_version"] = matrix[len(matrix)-1]
-			fmt.Fprintf(os.Stderr, "[DEBUG] Set build_version to: %s\n", matrix[len(matrix)-1])
-			if effectiveSource != "" {
-				metadata.LanguageSpecific["requires_python_source"] = effectiveSource
-			}
-		} else {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Matrix generation returned empty slice\n")
+		if err := resolveAndEmitMatrix(metadata, effectiveRequires, effectiveSource); err != nil {
+			return err
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "[DEBUG] RequiresPython is empty, skipping matrix generation\n")
@@ -542,13 +526,8 @@ func (e *Extractor) extractFromSetupCfg(path string, metadata *extractor.Project
 	}
 	if pythonRequires != "" {
 		metadata.LanguageSpecific["requires_python"] = pythonRequires
-		matrix := generatePythonVersionMatrix(pythonRequires)
-		if len(matrix) > 0 {
-			metadata.LanguageSpecific["version_matrix"] = matrix
-			metadata.LanguageSpecific["matrix_json"] = fmt.Sprintf(`{"python-version": [%s]}`,
-				strings.Join(quoteStrings(matrix), ", "))
-			metadata.LanguageSpecific["build_version"] = matrix[len(matrix)-1]
-			metadata.LanguageSpecific["requires_python_source"] = "requires-python"
+		if err := resolveAndEmitMatrix(metadata, pythonRequires, "requires-python"); err != nil {
+			return err
 		}
 	} else if classifierVersions := derivePythonVersionsFromClassifiers(classifiers); len(classifierVersions) > 0 {
 		// No python_requires declared but classifiers contain explicit
@@ -646,18 +625,8 @@ func (e *Extractor) extractFromSetupPy(path string, metadata *extractor.ProjectM
 
 	if pythonRequires := extractSetupPyField(text, "python_requires"); pythonRequires != "" {
 		metadata.LanguageSpecific["requires_python"] = pythonRequires
-
-		// Generate matrix
-		matrix := generatePythonVersionMatrix(pythonRequires)
-		if len(matrix) > 0 {
-			metadata.LanguageSpecific["version_matrix"] = matrix
-			matrixJSON := fmt.Sprintf(`{"python-version": [%s]}`,
-				strings.Join(quoteStrings(matrix), ", "))
-			metadata.LanguageSpecific["matrix_json"] = matrixJSON
-
-			// Set recommended build version (latest from matrix)
-			metadata.LanguageSpecific["build_version"] = matrix[len(matrix)-1]
-			metadata.LanguageSpecific["requires_python_source"] = "requires-python"
+		if err := resolveAndEmitMatrix(metadata, pythonRequires, "requires-python"); err != nil {
+			return err
 		}
 	} else if classifiers := extractSetupPyClassifiers(text); len(classifiers) > 0 {
 		metadata.LanguageSpecific["classifiers"] = classifiers
@@ -1133,7 +1102,7 @@ func applyFallbackPythonMatrix(metadata *extractor.ProjectMetadata, source strin
 		return
 	}
 
-	fallback := generatePythonVersionMatrix("")
+	fallback := generatePythonVersionMatrix("", ActivePolicy().SupportedSet)
 	if len(fallback) == 0 {
 		return
 	}
@@ -1154,6 +1123,55 @@ func applyFallbackPythonMatrix(metadata *extractor.ProjectMetadata, source strin
 	fmt.Fprintf(os.Stderr,
 		"[WARNING] %s does not declare requires-python or Python classifiers; using fallback Python matrix %v (build_version=%s, oldest supported)\n",
 		source, fallback, fallback[0])
+}
+
+// resolveAndEmitMatrix is the canonical matrix-emission helper shared by
+// every code path that has a non-empty `requires-python` style constraint
+// in hand. It:
+//
+//  1. Generates the matrix scoped to the active policy's supported set.
+//  2. Applies the configured EOL behaviour (warn / strip / fail).
+//  3. When strip empties the matrix, falls back to the policy's non-EOL
+//     supported set and overrides `requires_python_source` with
+//     "eol-fallback" so consumers can distinguish a hard EOL fallback
+//     from a static-fallback guess.
+//  4. Records `eol_filtered` so callers can tell whether the live API
+//     altered the constraint-derived matrix.
+//
+// Returns an error only when the policy's behaviour is "fail" and the
+// matrix still contains EOL versions after constraint resolution.
+func resolveAndEmitMatrix(metadata *extractor.ProjectMetadata, requiresPython, source string) error {
+	policy := ActivePolicy()
+	matrix := generatePythonVersionMatrix(requiresPython, policy.SupportedSet)
+	fmt.Fprintf(os.Stderr, "[DEBUG] Generated matrix: %v (len=%d)\n", matrix, len(matrix))
+
+	filtered, eolFiltered, err := applyEOLPolicy(matrix, policy)
+	if err != nil {
+		return err
+	}
+	effectiveSource := source
+	if eolFiltered && len(filtered) == 0 {
+		// Strip removed everything: fall back to the policy's non-EOL set.
+		filtered = policy.nonEOLSet()
+		effectiveSource = "eol-fallback"
+		fmt.Fprintf(os.Stderr,
+			"[WARNING] EOL filtering emptied the constraint-derived matrix for %q; falling back to live supported set %v\n",
+			requiresPython, filtered)
+	}
+	if len(filtered) == 0 {
+		fmt.Fprintf(os.Stderr, "[DEBUG] Matrix generation returned empty slice\n")
+		return nil
+	}
+
+	metadata.LanguageSpecific["version_matrix"] = filtered
+	metadata.LanguageSpecific["matrix_json"] = fmt.Sprintf(`{"python-version": [%s]}`,
+		strings.Join(quoteStrings(filtered), ", "))
+	metadata.LanguageSpecific["build_version"] = filtered[len(filtered)-1]
+	if effectiveSource != "" {
+		metadata.LanguageSpecific["requires_python_source"] = effectiveSource
+	}
+	metadata.LanguageSpecific["eol_filtered"] = eolFiltered
+	return nil
 }
 
 // parseINI parses a simple INI file into a map of sections
@@ -1265,21 +1283,25 @@ func extractSetupPyField(content, field string) string {
 var supportedPythonVersions = []string{"3.10", "3.11", "3.12", "3.13", "3.14"}
 
 // generatePythonVersionMatrix generates a list of Python versions from
-// a requires-python specifier.
+// a requires-python specifier, scoped to the supplied supported set.
 //
 // The function is a thin wrapper around `pyversions.ResolveVersions` so
 // build-metadata-action benefits from the full PEP 440 / Poetry caret
 // constraint solver that previously lived only in the dormant
 // `internal/pyversions` package. On any parse error or empty result we
-// fall back to the full supported set so callers always receive a
-// non-empty matrix.
-func generatePythonVersionMatrix(requiresPython string) []string {
-	if requiresPython == "" {
-		return append([]string(nil), supportedPythonVersions...)
+// fall back to the supplied supported set so callers always receive a
+// non-empty matrix. When supported is empty the package-level
+// `supportedPythonVersions` slice is used.
+func generatePythonVersionMatrix(requiresPython string, supported []string) []string {
+	if len(supported) == 0 {
+		supported = supportedPythonVersions
 	}
-	versions, err := pyversions.ResolveVersions(requiresPython, supportedPythonVersions)
+	if requiresPython == "" {
+		return append([]string(nil), supported...)
+	}
+	versions, err := pyversions.ResolveVersions(requiresPython, supported)
 	if err != nil || len(versions) == 0 {
-		return append([]string(nil), supportedPythonVersions...)
+		return append([]string(nil), supported...)
 	}
 	return versions
 }

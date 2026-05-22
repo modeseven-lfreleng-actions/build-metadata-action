@@ -71,6 +71,43 @@ inputs:
     required: false
     default: "false"
 
+  # ===================================================================
+  # Python-specific inputs (consumed by the Python extractor only)
+  # ===================================================================
+  python_eol_behaviour:
+    description: >-
+      How the Python extractor handles end-of-life Python versions that
+      remain in the constraint-derived matrix after resolution.
+      'warn' (default): keep the matrix as-is and emit ::warning:: lines
+      plus a $GITHUB_STEP_SUMMARY entry for each EOL version.
+      'strip': remove EOL versions from the matrix; fall back to the
+      policy's non-EOL supported set if stripping empties the matrix
+      (the source is then reported as 'eol-fallback').
+      'fail': abort extraction with a non-zero exit when any EOL version
+      remains in the matrix.
+    required: false
+    default: "warn"
+
+  python_offline_mode:
+    description: >-
+      When 'true', the Python extractor skips the live endoflife.date
+      consultation and uses the action's static supported-version list
+      (3.10 through 3.14 at the time of writing). Useful for hermetic
+      builds or when the runner has no outbound network access. Default
+      'false' so the extractor benefits from live EOL data.
+    required: false
+    default: "false"
+
+  python_eol_timeout:
+    description: "endoflife.date HTTP timeout in seconds (online mode only)"
+    required: false
+    default: "5"
+
+  python_eol_max_retries:
+    description: "endoflife.date HTTP retry budget (online mode only)"
+    required: false
+    default: "2"
+
 outputs:
   # Complete Metadata Outputs
   metadata_json:
@@ -232,6 +269,14 @@ outputs:
       Source from which the dependency list was loaded (typically
       "requirements.txt" for projects that delegate install_requires).
     value: ${{ steps.extract.outputs.python_dependencies_source }}
+
+  python_eol_filtered:
+    description: >-
+      'true' when the Python extractor's EOL policy (python_eol_behaviour
+      = 'strip') actually removed one or more versions from the matrix.
+      'false' when filtering was disabled (offline mode), behaviour was
+      'warn' (matrix kept intact), or no EOL versions matched.
+    value: ${{ steps.extract.outputs.python_eol_filtered }}
 
   python_project_match_package:
     description: "Whether Python project name matches package name"

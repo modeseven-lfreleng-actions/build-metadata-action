@@ -97,7 +97,7 @@ func TestGetSupportedVersions(t *testing.T) {
 			{Cycle: "3.12", EOL: futureDate},
 			{Cycle: "3.11", EOL: futureDate},
 			{Cycle: "3.10", EOL: futureDate},
-			{Cycle: "3.9", EOL: pastDate},  // EOL (reached 2025-10-31)
+			{Cycle: "3.9", EOL: pastDate}, // EOL (reached 2025-10-31)
 			{Cycle: "3.8", EOL: pastDate}, // EOL
 			{Cycle: "3.7", EOL: pastDate}, // EOL
 		}

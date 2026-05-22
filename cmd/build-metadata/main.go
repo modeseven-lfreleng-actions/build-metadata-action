@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	_ "github.com/lfreleng-actions/build-metadata-action/internal/extractor/julia"
 	_ "github.com/lfreleng-actions/build-metadata-action/internal/extractor/php"
 	_ "github.com/lfreleng-actions/build-metadata-action/internal/extractor/python"
+	python "github.com/lfreleng-actions/build-metadata-action/internal/extractor/python"
 	_ "github.com/lfreleng-actions/build-metadata-action/internal/extractor/ruby"
 	_ "github.com/lfreleng-actions/build-metadata-action/internal/extractor/rust"
 	_ "github.com/lfreleng-actions/build-metadata-action/internal/extractor/scala"
@@ -150,6 +152,30 @@ func main() {
 	artifactFormats := parseMultiSeparatorInput(artifactFormatsInput)
 	validateOutput := action.GetInput("validate_output") != "false"
 	exportEnvVars := action.GetInput("export_env_vars") == "true"
+
+	// Configure the Python extractor policy from action inputs. The
+	// policy is package-scoped in `internal/extractor/python` because
+	// the Extractor.Extract interface has a fixed signature; setting it
+	// here before invoking the extractor (which happens further down)
+	// is the canonical wiring point.
+	pythonOffline := action.GetInput("python_offline_mode") == "true"
+	pythonBehaviour := action.GetInput("python_eol_behaviour")
+	if pythonBehaviour == "" {
+		pythonBehaviour = python.EOLBehaviourWarn
+	}
+	pythonTimeout := 5 * time.Second
+	if raw := action.GetInput("python_eol_timeout"); raw != "" {
+		if parsed, perr := strconv.Atoi(raw); perr == nil && parsed > 0 {
+			pythonTimeout = time.Duration(parsed) * time.Second
+		}
+	}
+	pythonRetries := 2
+	if raw := action.GetInput("python_eol_max_retries"); raw != "" {
+		if parsed, perr := strconv.Atoi(raw); perr == nil && parsed >= 0 {
+			pythonRetries = parsed
+		}
+	}
+	python.SetActivePolicy(python.ResolvePolicy(pythonOffline, pythonBehaviour, pythonTimeout, pythonRetries))
 
 	// Initialize metadata
 	metadata := &Metadata{
