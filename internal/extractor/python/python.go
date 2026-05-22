@@ -898,8 +898,8 @@ func isSupportedPythonVersion(v string) bool {
 
 // derivePythonVersionsFromClassifiers extracts Python `X.Y` versions from
 // PEP-301 trove classifiers. Returns a deduplicated, version-sorted list
-// filtered to the set of actively supported Python versions (3.9+); EOL
-// versions (2.x, 3.6-3.8) are dropped so callers do not attempt to run
+// filtered to the set of actively supported Python versions (3.10+); EOL
+// versions (2.x, 3.6-3.9) are dropped so callers do not attempt to run
 // against interpreters that GitHub-hosted runners no longer install.
 func derivePythonVersionsFromClassifiers(classifiers []string) []string {
 	re := regexp.MustCompile(`Programming Language\s*::\s*Python\s*::\s*(\d+\.\d+)`)
@@ -1236,7 +1236,7 @@ func extractSetupPyField(content, field string) string {
 //
 // Update this slice (and only this slice) when Python's release cadence
 // changes; the rest of the extractor follows.
-var supportedPythonVersions = []string{"3.9", "3.10", "3.11", "3.12", "3.13", "3.14"}
+var supportedPythonVersions = []string{"3.10", "3.11", "3.12", "3.13", "3.14"}
 
 // generatePythonVersionMatrix generates a list of Python versions from a requires-python specifier
 func generatePythonVersionMatrix(requiresPython string) []string {
@@ -1292,9 +1292,19 @@ func generatePythonVersionMatrix(requiresPython string) []string {
 			}
 		} else {
 			// Legacy / unsupported minimum version: route through to
-			// the full supported set regardless of whether the request
-			// was below 3.9 or above the known maximum.
+			// the full supported set, but continue to apply the maximum
+			// constraint (if any) so an upper bound like `<3.11` still
+			// trims the resulting matrix.
 			versions = append([]string(nil), supportedPythonVersions...)
+			if maxVersion != "" {
+				filtered := []string{}
+				for _, v := range versions {
+					if compareVersions(v, maxVersion) < 0 {
+						filtered = append(filtered, v)
+					}
+				}
+				versions = filtered
+			}
 		}
 	}
 

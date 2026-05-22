@@ -400,13 +400,13 @@ func TestLegacy_DerivePythonVersionsFromClassifiers(t *testing.T) {
 	input := []string{
 		"Programming Language :: Python :: 3",
 		"Programming Language :: Python :: 3.11",
-		"Programming Language :: Python :: 3.9",
+		"Programming Language :: Python :: 3.10",
 		"Programming Language :: Python :: 3.11", // duplicate
 		"Operating System :: OS Independent",
 		"Programming Language :: Python :: 3 :: Only",
 	}
 	result := derivePythonVersionsFromClassifiers(input)
-	assert.Equal(t, []string{"3.9", "3.11"}, result)
+	assert.Equal(t, []string{"3.10", "3.11"}, result)
 }
 
 // TestLegacy_DetectDynamicProviderFromSetupPy covers each provider branch.
@@ -688,8 +688,8 @@ func TestLegacy_SetupPyScmNoVersionIsUnresolved(t *testing.T) {
 }
 
 // TestLegacy_ClassifierFiltersEolVersions confirms that EOL Python
-// versions (2.7, 3.6, 3.7, 3.8) declared in trove classifiers are
-// dropped, leaving only the actively supported set (3.9+).
+// versions (2.7, 3.6, 3.7, 3.8, 3.9) declared in trove classifiers are
+// dropped, leaving only the actively supported set (3.10+).
 func TestLegacy_ClassifierFiltersEolVersions(t *testing.T) {
 	input := []string{
 		"Programming Language :: Python :: 2",
@@ -698,10 +698,11 @@ func TestLegacy_ClassifierFiltersEolVersions(t *testing.T) {
 		"Programming Language :: Python :: 3.7",
 		"Programming Language :: Python :: 3.8",
 		"Programming Language :: Python :: 3.9",
+		"Programming Language :: Python :: 3.10",
 		"Programming Language :: Python :: 3.11",
 	}
 	result := derivePythonVersionsFromClassifiers(input)
-	assert.Equal(t, []string{"3.9", "3.11"}, result,
+	assert.Equal(t, []string{"3.10", "3.11"}, result,
 		"EOL Python versions must be filtered out of classifier-derived matrices")
 }
 

@@ -341,7 +341,7 @@ When used in a GitHub Actions workflow, the action generates a rich step summary
 | Key | Value |
 |-----|-------|
 | Package Name | `dependamerge` |
-| Requires Python | >=3.9 |
+| Requires Python | >=3.10 |
 | Build Backend | setuptools |
 | Metadata Source | pyproject.toml |
 
@@ -349,7 +349,7 @@ When used in a GitHub Actions workflow, the action generates a rich step summary
 
 ```json
 {
-  "python-version": ["3.9", "3.10", "3.11", "3.12", "3.13"]
+  "python-version": ["3.10", "3.11", "3.12", "3.13"]
 }
 ```
 

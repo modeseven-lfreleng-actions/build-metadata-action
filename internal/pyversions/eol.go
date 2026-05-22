@@ -122,8 +122,11 @@ func (c *EOLClient) fetchOnce() ([]EOLData, error) {
 	return data, nil
 }
 
-// GetSupportedVersions extracts currently supported Python versions (3.9+)
-// Returns versions that are not end-of-life
+// GetSupportedVersions extracts currently supported Python versions (3.10+).
+// Returns versions that are not end-of-life. Python 3.9 reached EOL on
+// 2025-10-31 and is excluded from the floor regardless of the upstream
+// endoflife.date response, so callers don't get stuck building against an
+// interpreter that no longer receives security updates.
 func (c *EOLClient) GetSupportedVersions() ([]string, error) {
 	data, err := c.FetchEOLData()
 	if err != nil {
@@ -133,8 +136,8 @@ func (c *EOLClient) GetSupportedVersions() ([]string, error) {
 	var supported []string
 
 	for _, entry := range data {
-		// Only include Python 3.9 and later
-		if !isVersion39OrLater(entry.Cycle) {
+		// Only include Python 3.10 and later
+		if !isVersion310OrLater(entry.Cycle) {
 			continue
 		}
 
@@ -190,18 +193,18 @@ func (c *EOLClient) IsVersionEOL(version string, data []EOLData) (bool, string) 
 }
 
 // GetFallbackVersions returns a hardcoded list of supported versions
-// Used when the API is unavailable or in offline mode
+// Used when the API is unavailable or in offline mode.
+// Python 3.9 reached EOL on 2025-10-31 and is deliberately omitted.
 func GetFallbackVersions() []string {
 	// This list should be periodically updated
-	// Current as of 2025
-	return []string{"3.9", "3.10", "3.11", "3.12", "3.13", "3.14"}
+	// Current as of 2026
+	return []string{"3.10", "3.11", "3.12", "3.13", "3.14"}
 }
 
-// isVersion39OrLater checks if a version string is Python 3.9 or later
-func isVersion39OrLater(version string) bool {
-	// Match pattern: 3.9, 3.10, 3.11, ... or 4.x, 5.x, etc.
-	// We want 3.9+ or 4.0+
-
+// isVersion310OrLater checks if a version string is Python 3.10 or later.
+// The 3.10 floor reflects Python 3.9 reaching end-of-life on 2025-10-31.
+func isVersion310OrLater(version string) bool {
+	// Match pattern: 3.10, 3.11, ... or 4.x, 5.x, etc.
 	var major, minor int
 	n, err := fmt.Sscanf(version, "%d.%d", &major, &minor)
 	if err != nil || n != 2 {
@@ -213,8 +216,8 @@ func isVersion39OrLater(version string) bool {
 		return true
 	}
 
-	// Python 3.9 or later
-	if major == 3 && minor >= 9 {
+	// Python 3.10 or later
+	if major == 3 && minor >= 10 {
 		return true
 	}
 

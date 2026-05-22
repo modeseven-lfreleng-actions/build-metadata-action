@@ -97,7 +97,7 @@ func TestGetSupportedVersions(t *testing.T) {
 			{Cycle: "3.12", EOL: futureDate},
 			{Cycle: "3.11", EOL: futureDate},
 			{Cycle: "3.10", EOL: futureDate},
-			{Cycle: "3.9", EOL: futureDate},
+			{Cycle: "3.9", EOL: pastDate},  // EOL (reached 2025-10-31)
 			{Cycle: "3.8", EOL: pastDate}, // EOL
 			{Cycle: "3.7", EOL: pastDate}, // EOL
 		}
@@ -106,21 +106,22 @@ func TestGetSupportedVersions(t *testing.T) {
 		supported, err := client.GetSupportedVersions()
 		require.NoError(t, err)
 
-		// Should include 3.9+ and exclude 3.8 and earlier
+		// Should include 3.10+ and exclude 3.9 (EOL) and earlier
 		assert.Contains(t, supported, "3.13")
 		assert.Contains(t, supported, "3.12")
 		assert.Contains(t, supported, "3.11")
 		assert.Contains(t, supported, "3.10")
-		assert.Contains(t, supported, "3.9")
+		assert.NotContains(t, supported, "3.9")
 		assert.NotContains(t, supported, "3.8")
 		assert.NotContains(t, supported, "3.7")
 	})
 
-	t.Run("filters out pre-3.9 versions", func(t *testing.T) {
+	t.Run("filters out pre-3.10 versions", func(t *testing.T) {
 		futureDate := time.Now().AddDate(1, 0, 0).Format("2006-01-02")
 
 		client.cachedData = []EOLData{
 			{Cycle: "3.10", EOL: futureDate},
+			{Cycle: "3.9", EOL: futureDate}, // Should be filtered (3.10 floor)
 			{Cycle: "3.8", EOL: futureDate}, // Should be filtered
 			{Cycle: "3.7", EOL: futureDate}, // Should be filtered
 			{Cycle: "2.7", EOL: futureDate}, // Should be filtered
@@ -131,6 +132,7 @@ func TestGetSupportedVersions(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Contains(t, supported, "3.10")
+		assert.NotContains(t, supported, "3.9")
 		assert.NotContains(t, supported, "3.8")
 		assert.NotContains(t, supported, "3.7")
 		assert.NotContains(t, supported, "2.7")
@@ -184,24 +186,25 @@ func TestGetFallbackVersions(t *testing.T) {
 	versions := GetFallbackVersions()
 
 	assert.NotEmpty(t, versions)
-	assert.Contains(t, versions, "3.9")
 	assert.Contains(t, versions, "3.10")
 	assert.Contains(t, versions, "3.11")
 	assert.Contains(t, versions, "3.12")
 	assert.Contains(t, versions, "3.13")
+	assert.Contains(t, versions, "3.14")
 
-	// Should not contain old versions
+	// Should not contain EOL versions. 3.9 reached EOL on 2025-10-31
+	// and was dropped from the fallback set.
+	assert.NotContains(t, versions, "3.9")
 	assert.NotContains(t, versions, "3.8")
 	assert.NotContains(t, versions, "3.7")
 	assert.NotContains(t, versions, "2.7")
 }
 
-func TestIsVersion39OrLater(t *testing.T) {
+func TestIsVersion310OrLater(t *testing.T) {
 	tests := []struct {
 		version  string
 		expected bool
 	}{
-		{"3.9", true},
 		{"3.10", true},
 		{"3.11", true},
 		{"3.12", true},
@@ -210,6 +213,7 @@ func TestIsVersion39OrLater(t *testing.T) {
 		{"3.99", true},
 		{"4.0", true},
 		{"5.1", true},
+		{"3.9", false},
 		{"3.8", false},
 		{"3.7", false},
 		{"3.6", false},
@@ -221,7 +225,7 @@ func TestIsVersion39OrLater(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.version, func(t *testing.T) {
-			result := isVersion39OrLater(tt.version)
+			result := isVersion310OrLater(tt.version)
 			assert.Equal(t, tt.expected, result, "version %s", tt.version)
 		})
 	}
