@@ -51,7 +51,7 @@ func TestParseConstraints(t *testing.T) {
 			input: "~=3.10",
 			expected: []Constraint{
 				{Operator: ">=", Version: "3.10"},
-				{Operator: "<", Version: "3.11"},
+				{Operator: "<", Version: "4.0"},
 			},
 		},
 		{
@@ -144,7 +144,7 @@ func TestNormalizeConstraint(t *testing.T) {
 		{
 			name:     "compatible release",
 			input:    "~=3.10",
-			expected: ">=3.10,<3.11",
+			expected: ">=3.10,<4.0",
 		},
 		{
 			name:     "compatible release with patch",
@@ -345,7 +345,7 @@ func TestResolveVersions(t *testing.T) {
 			name:           "compatible release ~=3.10",
 			requiresPython: "~=3.10",
 			supported:      supportedVersions,
-			expected:       []string{"3.10"},
+			expected:       []string{"3.10", "3.11", "3.12", "3.13"},
 		},
 		{
 			name:           "poetry caret ^3.10",
@@ -539,9 +539,9 @@ func TestIntegrationScenarios(t *testing.T) {
 		{
 			name:           "pyproject_poetry_compatible",
 			requiresPython: "~=3.11",
-			expectedCount:  1,
+			expectedCount:  4,
 			expectedMin:    "3.11",
-			expectedMax:    "3.11",
+			expectedMax:    "3.14",
 		},
 		{
 			name:           "pyproject_poetry_exact",

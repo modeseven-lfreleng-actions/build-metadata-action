@@ -16,11 +16,22 @@ import (
 
 func TestNewEOLClient(t *testing.T) {
 	t.Run("with default values", func(t *testing.T) {
-		client := NewEOLClient(0, 0)
+		// Sentinel values: timeout <= 0 and maxRetries < 0 select the
+		// library defaults. (maxRetries == 0 now explicitly means "no
+		// retries" so callers can opt out of retry behaviour.)
+		client := NewEOLClient(0, -1)
 		assert.NotNil(t, client)
 		assert.Equal(t, DefaultTimeout, client.timeout)
 		assert.Equal(t, DefaultMaxRetries, client.maxRetries)
 		assert.NotNil(t, client.httpClient)
+	})
+
+	t.Run("maxRetries=0 means no retries", func(t *testing.T) {
+		client := NewEOLClient(0, 0)
+		assert.NotNil(t, client)
+		assert.Equal(t, 0, client.maxRetries,
+			"zero must NOT be remapped to DefaultMaxRetries; "+
+				"callers explicitly opt out of retry behaviour with 0")
 	})
 
 	t.Run("with custom values", func(t *testing.T) {
@@ -97,9 +108,14 @@ func TestGetSupportedVersions(t *testing.T) {
 			{Cycle: "3.12", EOL: futureDate},
 			{Cycle: "3.11", EOL: futureDate},
 			{Cycle: "3.10", EOL: futureDate},
-			{Cycle: "3.9", EOL: pastDate}, // EOL (reached 2025-10-31)
-			{Cycle: "3.8", EOL: pastDate}, // EOL
-			{Cycle: "3.7", EOL: pastDate}, // EOL
+			// pastDate is computed relative to time.Now() rather than
+			// being pinned to a specific real-world EOL date, so the
+			// inline notes below only flag these cycles as "in the past"
+			// for filtering purposes; they do not assert the actual
+			// upstream EOL dates.
+			{Cycle: "3.9", EOL: pastDate}, // EOL (date in the past)
+			{Cycle: "3.8", EOL: pastDate}, // EOL (date in the past)
+			{Cycle: "3.7", EOL: pastDate}, // EOL (date in the past)
 		}
 		client.cacheTime = time.Now()
 
@@ -200,7 +216,7 @@ func TestGetFallbackVersions(t *testing.T) {
 	assert.NotContains(t, versions, "2.7")
 }
 
-func TestIsVersion310OrLater(t *testing.T) {
+func TestIsVersionBaselineOrLater(t *testing.T) {
 	tests := []struct {
 		version  string
 		expected bool
@@ -225,7 +241,7 @@ func TestIsVersion310OrLater(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.version, func(t *testing.T) {
-			result := isVersion310OrLater(tt.version)
+			result := isVersionBaselineOrLater(tt.version)
 			assert.Equal(t, tt.expected, result, "version %s", tt.version)
 		})
 	}

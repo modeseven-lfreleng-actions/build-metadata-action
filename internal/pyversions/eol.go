@@ -40,12 +40,23 @@ type EOLClient struct {
 	cacheTime  time.Time
 }
 
-// NewEOLClient creates a new EOL API client
+// NewEOLClient creates a new EOL API client.
+//
+// Semantics for the sentinel values:
+//
+//   - `timeout <= 0` selects DefaultTimeout. Go's `http.Client{Timeout: 0}`
+//     means "no timeout" -- the client would wait indefinitely for a
+//     hung peer -- so this overload exists to keep callers from
+//     accidentally configuring an unbounded request budget.
+//   - `maxRetries < 0` selects DefaultMaxRetries. `maxRetries == 0`
+//     means "no retries" -- callers can therefore explicitly opt out of
+//     retry behaviour by passing zero (previously zero was ambiguous
+//     with "use the default").
 func NewEOLClient(timeout time.Duration, maxRetries int) *EOLClient {
-	if timeout == 0 {
+	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	if maxRetries == 0 {
+	if maxRetries < 0 {
 		maxRetries = DefaultMaxRetries
 	}
 
@@ -122,11 +133,13 @@ func (c *EOLClient) fetchOnce() ([]EOLData, error) {
 	return data, nil
 }
 
-// GetSupportedVersions extracts currently supported Python versions (3.10+).
-// Returns versions that are not end-of-life. Python 3.9 reached EOL on
-// 2025-10-31 and is excluded from the floor regardless of the upstream
-// endoflife.date response, so callers don't get stuck building against an
-// interpreter that no longer receives security updates.
+// GetSupportedVersions extracts currently supported Python versions at or
+// above the configured baseline (see baselineMajor/baselineMinor). Returns
+// versions that are not end-of-life. The baseline is bumped explicitly
+// when a Python release reaches EOL; callers therefore never get stuck
+// building against an interpreter that no longer receives security
+// updates regardless of how stale the upstream endoflife.date response
+// might be.
 func (c *EOLClient) GetSupportedVersions() ([]string, error) {
 	data, err := c.FetchEOLData()
 	if err != nil {
@@ -136,8 +149,8 @@ func (c *EOLClient) GetSupportedVersions() ([]string, error) {
 	var supported []string
 
 	for _, entry := range data {
-		// Only include Python 3.10 and later
-		if !isVersion310OrLater(entry.Cycle) {
+		// Only include versions at or above the baseline
+		if !isVersionBaselineOrLater(entry.Cycle) {
 			continue
 		}
 
@@ -192,32 +205,90 @@ func (c *EOLClient) IsVersionEOL(version string, data []EOLData) (bool, string) 
 	return false, ""
 }
 
-// GetFallbackVersions returns a hardcoded list of supported versions
-// Used when the API is unavailable or in offline mode.
-// Python 3.9 reached EOL on 2025-10-31 and is deliberately omitted.
-func GetFallbackVersions() []string {
-	// This list should be periodically updated
-	// Current as of 2026
-	return []string{"3.10", "3.11", "3.12", "3.13", "3.14"}
+// baselineMajor, baselineMinor define the OLDEST Python release this
+// action will recognise as a supportable interpreter. latestMajor,
+// latestMinor define the NEWEST. They are the only version literals
+// in this package controlling the supported range: bumping either bound
+// when Python's release cadence changes (a release reaching EOL, or a
+// new minor shipping) is a one-line change here. Every other consumer
+// in this repository derives from these constants -- see
+// `GetFallbackVersions`, `Baseline`, `Latest`, and the Python extractor's
+// `supportedPythonVersions` slice, which is initialised from
+// `GetFallbackVersions()`.
+//
+// The naming is intentionally version-agnostic so the surrounding
+// helpers (`isVersionBaselineOrLater`, `GetFallbackVersions`, ...) do
+// not need to be renamed on every annual cadence.
+const (
+	baselineMajor = 3
+	baselineMinor = 10
+	latestMajor   = 3
+	latestMinor   = 14
+)
+
+// Baseline returns the oldest supported Python version as a major.minor
+// string (e.g. "3.10"). It is the single exported representation of
+// `baselineMajor.baselineMinor` for callers outside the pyversions
+// package, so the baseline floor stays a one-line change here.
+func Baseline() string {
+	return fmt.Sprintf("%d.%d", baselineMajor, baselineMinor)
 }
 
-// isVersion310OrLater checks if a version string is Python 3.10 or later.
-// The 3.10 floor reflects Python 3.9 reaching end-of-life on 2025-10-31.
-func isVersion310OrLater(version string) bool {
-	// Match pattern: 3.10, 3.11, ... or 4.x, 5.x, etc.
+// Latest returns the newest supported Python version as a major.minor
+// string (e.g. "3.14"). The companion to Baseline; bumping the upper
+// bound is a one-line change to `latestMinor` (or `latestMajor`).
+func Latest() string {
+	return fmt.Sprintf("%d.%d", latestMajor, latestMinor)
+}
+
+// GetFallbackVersions returns the canonical list of supported Python
+// versions at or above the baseline and at or below the latest bound,
+// in ascending order. Used when the live endoflife.date API is
+// unavailable or in offline mode, and as the initialiser for the Python
+// extractor's `supportedPythonVersions` slice.
+//
+// The list is computed dynamically from `baselineMajor`, `baselineMinor`,
+// `latestMajor`, and `latestMinor` so that a Python release cadence bump
+// requires a single-line constant change rather than hand-editing the
+// returned slice. For now the action only supports the Python 3.x line;
+// the loop intentionally treats `latestMajor != baselineMajor` as a
+// future extension and panics rather than silently returning a wrong set.
+func GetFallbackVersions() []string {
+	if baselineMajor != latestMajor {
+		// Crossing a major boundary requires bespoke iteration logic
+		// (Python 3 ended at 3.x, Python 4 would restart at 4.0). The
+		// action does not currently support a non-3 major; bump this
+		// helper if/when Python 4 ships and is supportable.
+		panic(fmt.Sprintf(
+			"pyversions: cross-major fallback range %d.%d..%d.%d not implemented",
+			baselineMajor, baselineMinor, latestMajor, latestMinor))
+	}
+	versions := make([]string, 0, latestMinor-baselineMinor+1)
+	for minor := baselineMinor; minor <= latestMinor; minor++ {
+		versions = append(versions, fmt.Sprintf("%d.%d", baselineMajor, minor))
+	}
+	return versions
+}
+
+// isVersionBaselineOrLater checks whether a version string is at or
+// above the configured baseline (baselineMajor.baselineMinor). The name
+// is intentionally version-agnostic so the function does not need to be
+// renamed when the baseline floor moves; bump the constants instead.
+func isVersionBaselineOrLater(version string) bool {
+	// Match pattern: X.Y where X is the major and Y is the minor.
 	var major, minor int
 	n, err := fmt.Sscanf(version, "%d.%d", &major, &minor)
 	if err != nil || n != 2 {
 		return false
 	}
 
-	// Major version 4 or higher
-	if major >= 4 {
+	// Major version strictly above the baseline major: accept any minor.
+	if major > baselineMajor {
 		return true
 	}
 
-	// Python 3.10 or later
-	if major == 3 && minor >= 10 {
+	// Same major: accept when minor is at or above the baseline minor.
+	if major == baselineMajor && minor >= baselineMinor {
 		return true
 	}
 

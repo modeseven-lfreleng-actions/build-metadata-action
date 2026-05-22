@@ -68,16 +68,18 @@ func TestLegacy_PbrSetupCfg(t *testing.T) {
 	assert.Equal(t, true, metadata.LanguageSpecific["version_unresolved"])
 
 	// No python_requires, no version classifiers => fallback matrix.
-	// The fallback deliberately selects the OLDEST supported Python so
-	// legacy projects (such as this PBR/setup.cfg shape) are not built
-	// against the newest interpreter they were never validated against.
+	// The fallback selects the LATEST supported Python so the
+	// `python_build_version` output matches the action.yaml contract
+	// ("Recommended Python version for building (latest from matrix)").
+	// The constraint-derived path uses the same selection, so all matrix
+	// emission paths agree on which version is recommended for builds.
 	assert.Equal(t, true, metadata.LanguageSpecific["requires_python_fallback"])
 	buildVersion, _ := metadata.LanguageSpecific["build_version"].(string)
 	assert.NotEmpty(t, buildVersion)
 	fallbackMatrix, _ := metadata.LanguageSpecific["version_matrix"].([]string)
 	require.NotEmpty(t, fallbackMatrix, "fallback matrix must be populated")
-	assert.Equal(t, fallbackMatrix[0], buildVersion,
-		"fallback build_version must be the OLDEST entry in the matrix")
+	assert.Equal(t, fallbackMatrix[len(fallbackMatrix)-1], buildVersion,
+		"fallback build_version must be the LATEST entry in the matrix (action.yaml contract)")
 
 	// requirements.txt should have been picked up as the dependency list
 	// because install_requires is absent from setup.cfg.
@@ -301,8 +303,8 @@ func TestLegacy_BareSetupPyFallback(t *testing.T) {
 	assert.NotEmpty(t, buildVersion)
 	fallbackMatrix, _ := metadata.LanguageSpecific["version_matrix"].([]string)
 	require.NotEmpty(t, fallbackMatrix, "fallback matrix must be populated")
-	assert.Equal(t, fallbackMatrix[0], buildVersion,
-		"fallback build_version must be the OLDEST supported Python version")
+	assert.Equal(t, fallbackMatrix[len(fallbackMatrix)-1], buildVersion,
+		"fallback build_version must be the LATEST supported Python version (action.yaml contract)")
 	matrixJSON, _ := metadata.LanguageSpecific["matrix_json"].(string)
 	assert.Contains(t, matrixJSON, "python-version")
 }
@@ -357,8 +359,8 @@ func TestLegacy_PyProjectWithoutRequiresPythonFallback(t *testing.T) {
 	assert.NotEmpty(t, metadata.LanguageSpecific["build_version"])
 	fallbackMatrix, _ := metadata.LanguageSpecific["version_matrix"].([]string)
 	require.NotEmpty(t, fallbackMatrix, "fallback matrix must be populated")
-	assert.Equal(t, fallbackMatrix[0], metadata.LanguageSpecific["build_version"],
-		"fallback build_version must be the OLDEST supported Python version")
+	assert.Equal(t, fallbackMatrix[len(fallbackMatrix)-1], metadata.LanguageSpecific["build_version"],
+		"fallback build_version must be the LATEST supported Python version (action.yaml contract)")
 }
 
 // TestLegacy_ParseSetupCfgContinuationLines verifies the new INI parser
@@ -687,10 +689,14 @@ func TestLegacy_SetupPyScmNoVersionIsUnresolved(t *testing.T) {
 	assert.Equal(t, true, metadata.LanguageSpecific["version_unresolved"])
 }
 
-// TestLegacy_ClassifierFiltersEolVersions confirms that EOL Python
-// versions (2.7, 3.6, 3.7, 3.8, 3.9) declared in trove classifiers are
-// dropped, leaving only the actively supported set (3.10+).
-func TestLegacy_ClassifierFiltersEolVersions(t *testing.T) {
+// TestLegacy_ClassifierFiltersOutOfRangeVersions confirms that Python
+// versions declared in trove classifiers that fall outside the active
+// policy's SupportedSet (in the default offline policy: anything below
+// the baseline floor, which today excludes 2.x and 3.6-3.9) are filtered
+// out of the classifier-derived matrix. EOL filtering proper is handled
+// separately by the policy and surfaced via the `python_eol_versions`
+// outputs; this test covers the supported-range filter only.
+func TestLegacy_ClassifierFiltersOutOfRangeVersions(t *testing.T) {
 	input := []string{
 		"Programming Language :: Python :: 2",
 		"Programming Language :: Python :: 2.7",
@@ -703,7 +709,7 @@ func TestLegacy_ClassifierFiltersEolVersions(t *testing.T) {
 	}
 	result := derivePythonVersionsFromClassifiers(input)
 	assert.Equal(t, []string{"3.10", "3.11"}, result,
-		"EOL Python versions must be filtered out of classifier-derived matrices")
+		"classifier-derived matrices must drop versions outside the active policy's SupportedSet")
 }
 
 // TestLegacy_SetupPyPbrFalsePositive guards against the regex-prefix

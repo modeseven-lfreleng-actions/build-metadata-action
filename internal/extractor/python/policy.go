@@ -6,48 +6,38 @@ package python
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/lfreleng-actions/build-metadata-action/internal/pyversions"
 )
 
-// EOL behaviour names. The Python extractor consults the active policy
-// to decide what to do with Python versions that the live endoflife.date
-// API marks as end-of-life.
-const (
-	// EOLBehaviourWarn keeps EOL versions in the resolved matrix and
-	// emits a ::warning:: line for each so consumers can surface the
-	// risk without changing build topology.
-	EOLBehaviourWarn = "warn"
-	// EOLBehaviourStrip removes EOL versions from the resolved matrix.
-	// When this empties the matrix the extractor falls back to the live
-	// supported set and stamps the source as "eol-fallback".
-	EOLBehaviourStrip = "strip"
-	// EOLBehaviourFail aborts the extraction when any EOL version
-	// remains in the resolved matrix.
-	EOLBehaviourFail = "fail"
-)
-
 // Policy controls how the Python extractor resolves the supported-Python
-// set and what it does with EOL versions that otherwise pass through the
-// constraint solver.
+// set. It carries information ABOUT EOL versions (so the extractor can
+// surface them via outputs) but never imposes a behaviour: the action
+// always exits cleanly and downstream consumers decide what to do about
+// EOL hits via the `python_eol_versions_present` /
+// `python_eol_versions` outputs.
 //
 // The policy is package-scoped (see `activePolicy`) because the
 // `extractor.Extractor` interface has a fixed `Extract(path string)`
-// signature that we cannot widen. `cmd/build-metadata/main.go` configures
-// the policy from action inputs before invoking Extract; tests set it
-// directly for deterministic mocking of the live EOL API.
+// signature that we cannot widen. `cmd/build-metadata/main.go`
+// configures the policy from action inputs before invoking Extract;
+// tests set it directly for deterministic mocking of the live EOL API.
 type Policy struct {
 	Offline    bool
-	Behaviour  string
 	Timeout    time.Duration
 	MaxRetries int
 
 	// SupportedSet is the canonical list of versions the matrix
-	// generator is allowed to emit. Defaults to `supportedPythonVersions`
-	// in offline mode, or to the live API intersection with the 3.10
-	// floor when online.
+	// generator is allowed to emit. Defaults to
+	// `supportedPythonVersions` in offline mode, or to every cycle
+	// from the live API at or above the baseline floor (EOL or not)
+	// when online. EOL membership is tracked separately in
+	// `EOLVersions` so the extractor can surface it without removing
+	// anything. The baseline floor itself is `pyversions.Baseline()`;
+	// see the constants in `internal/pyversions/eol.go`.
 	SupportedSet []string
 
 	// EOLVersions is the set of versions that the live API marked
@@ -59,13 +49,12 @@ type Policy struct {
 	LiveFallbackUsed bool
 }
 
-// defaultPolicy returns an offline policy with warn behaviour and the
-// static supported set. This is the policy the extractor uses when no
-// caller has overridden it (e.g. `go test`).
+// defaultPolicy returns an offline policy with the static supported
+// set. This is the policy the extractor uses when no caller has
+// overridden it (e.g. `go test`).
 func defaultPolicy() *Policy {
 	return &Policy{
 		Offline:      true,
-		Behaviour:    EOLBehaviourWarn,
 		SupportedSet: append([]string(nil), supportedPythonVersions...),
 		EOLVersions:  map[string]bool{},
 	}
@@ -82,9 +71,6 @@ func SetActivePolicy(p *Policy) {
 	if p == nil {
 		activePolicy = defaultPolicy()
 		return
-	}
-	if p.Behaviour == "" {
-		p.Behaviour = EOLBehaviourWarn
 	}
 	if p.EOLVersions == nil {
 		p.EOLVersions = map[string]bool{}
@@ -106,22 +92,9 @@ func ActivePolicy() *Policy {
 // ResolvePolicy builds a Policy from CLI inputs, consulting the live
 // EOL API when offline is false. Returns the resolved policy ready to
 // be passed to SetActivePolicy.
-func ResolvePolicy(offline bool, behaviour string, timeout time.Duration, maxRetries int) *Policy {
-	switch behaviour {
-	case EOLBehaviourStrip, EOLBehaviourFail, EOLBehaviourWarn:
-		// supported value, keep as is
-	case "":
-		behaviour = EOLBehaviourWarn
-	default:
-		fmt.Fprintf(os.Stderr,
-			"[WARNING] Unknown python_eol_behaviour %q; falling back to %q\n",
-			behaviour, EOLBehaviourWarn)
-		behaviour = EOLBehaviourWarn
-	}
-
+func ResolvePolicy(offline bool, timeout time.Duration, maxRetries int) *Policy {
 	p := &Policy{
 		Offline:     offline,
-		Behaviour:   behaviour,
 		Timeout:     timeout,
 		MaxRetries:  maxRetries,
 		EOLVersions: map[string]bool{},
@@ -143,95 +116,98 @@ func ResolvePolicy(offline bool, behaviour string, timeout time.Duration, maxRet
 	}
 
 	// Walk the entire API response, recording every EOL cycle so the
-	// matrix-emission step can apply the configured behaviour.
+	// matrix-emission step can surface the EOL membership via the
+	// `python_eol_versions` / `python_eol_versions_present` outputs.
 	for _, entry := range data {
 		if eol, _ := client.IsVersionEOL(entry.Cycle, data); eol {
 			p.EOLVersions[entry.Cycle] = true
 		}
 	}
 
-	// Derive the supported set from non-EOL cycles, intersected with
-	// the 3.10 floor. We never widen below 3.10 even if the live API
-	// reports something older as still supported.
-	live, _ := client.GetSupportedVersions()
-	intersected := make([]string, 0, len(live))
-	for _, v := range live {
-		if compareVersionStrings(v, "3.10") >= 0 {
-			intersected = append(intersected, v)
+	// Build the supported set from every cycle in the live response
+	// that is between the baseline floor and the latest ceiling --
+	// INCLUDING EOL cycles. The constraint solver therefore sees every
+	// conceivable Python version in the supported range; EOL ones
+	// still appear in the resolved matrix because reporting is the
+	// extractor's only job here.
+	//
+	// Both bounds are sourced from `pyversions.Baseline()` and
+	// `pyversions.Latest()` so a range bump (an EOL drop or a freshly
+	// released minor) remains a one-line change in
+	// `internal/pyversions/eol.go`. Without the upper bound the action
+	// would automatically start emitting any newer minor (or a future
+	// major like 4.0) as soon as endoflife.date listed it, which can
+	// break downstream workflows whose runners/tooling do not yet
+	// support that interpreter.
+	floor := pyversions.Baseline()
+	ceiling := pyversions.Latest()
+	cycles := make([]string, 0, len(data))
+	for _, entry := range data {
+		cycle := entry.Cycle
+		if compareVersionStrings(cycle, floor) < 0 {
+			continue
 		}
+		if compareVersionStrings(cycle, ceiling) > 0 {
+			continue
+		}
+		cycles = append(cycles, cycle)
 	}
-	if len(intersected) == 0 {
+	if len(cycles) == 0 {
 		fmt.Fprintf(os.Stderr,
-			"[WARNING] Live EOL data yielded no supported Python versions; using static supported set\n")
+			"[WARNING] Live EOL data yielded no Python versions in the %s..%s range; using static supported set\n",
+			floor, ceiling)
 		p.SupportedSet = append([]string(nil), supportedPythonVersions...)
 		p.LiveFallbackUsed = true
 		return p
 	}
-	p.SupportedSet = intersected
+	// endoflife.date returns cycles in newest-first order. Downstream
+	// consumers (in particular `resolveAndEmitMatrix`, which picks the
+	// last element as `build_version`) assume ascending order; sort
+	// here so the live and static paths produce equivalent matrices.
+	sort.Slice(cycles, func(i, j int) bool {
+		return compareVersionStrings(cycles[i], cycles[j]) < 0
+	})
+	p.SupportedSet = cycles
 	return p
 }
 
-// nonEOLSet returns the policy's SupportedSet with any EOL versions
-// filtered out. Used by the eol-fallback path when EOL filtering empties
-// the constraint-derived matrix.
-func (p *Policy) nonEOLSet() []string {
-	out := make([]string, 0, len(p.SupportedSet))
-	for _, v := range p.SupportedSet {
-		if !p.EOLVersions[v] {
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
-// applyEOLPolicy applies the configured EOL behaviour to a matrix.
-// Returns the (possibly filtered) matrix, a boolean indicating whether
-// EOL filtering actually changed the input, and an error when the
-// behaviour is "fail" and EOL versions are present.
-func applyEOLPolicy(matrix []string, p *Policy) ([]string, bool, error) {
+// detectEOLInMatrix returns the subset of `matrix` that the policy
+// marks as end-of-life, in the matrix's original order. The matrix
+// itself is never modified: build-metadata-action surfaces the EOL
+// membership via dedicated outputs and leaves any policy decisions
+// (warn, strip, fail) to downstream consumers such as
+// python-build-action.
+func detectEOLInMatrix(matrix []string, p *Policy) []string {
 	if p == nil || len(p.EOLVersions) == 0 || len(matrix) == 0 {
-		return matrix, false, nil
+		return nil
 	}
-	eolHits := []string{}
-	keep := []string{}
+	var hits []string
 	for _, v := range matrix {
 		if p.EOLVersions[v] {
-			eolHits = append(eolHits, v)
-		} else {
-			keep = append(keep, v)
+			hits = append(hits, v)
 		}
 	}
-	if len(eolHits) == 0 {
-		return matrix, false, nil
-	}
-	switch p.Behaviour {
-	case EOLBehaviourStrip:
-		for _, v := range eolHits {
-			fmt.Fprintf(os.Stderr,
-				"::warning::Python %s is end-of-life; stripped from matrix\n", v)
-		}
-		writeEOLStepSummary(eolHits, "stripped")
-		return keep, true, nil
-	case EOLBehaviourFail:
-		return nil, false, fmt.Errorf(
-			"matrix contains end-of-life Python versions %v (python_eol_behaviour=fail)",
-			eolHits)
-	case EOLBehaviourWarn:
-		fallthrough
-	default:
-		for _, v := range eolHits {
-			fmt.Fprintf(os.Stderr,
-				"::warning::Python %s is end-of-life but remains in the build matrix\n", v)
-		}
-		writeEOLStepSummary(eolHits, "warned")
-		return matrix, false, nil
-	}
+	return hits
 }
 
-// writeEOLStepSummary appends an EOL notice to the GitHub Actions step
-// summary file when one is configured. Best-effort: failures are
-// silently swallowed because the step summary is purely advisory.
-func writeEOLStepSummary(eolHits []string, action string) {
+// debugf writes a debug log line to stderr only when INPUT_VERBOSE is
+// set to "true" (matching the convention used by other extractors and
+// documented by the action's `verbose` input). Without this gate, the
+// extractor would spam logs even on quiet runs and bury more important
+// `::warning::` / `::error::` lines.
+func debugf(format string, args ...interface{}) {
+	if os.Getenv("INPUT_VERBOSE") != "true" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, format, args...)
+}
+
+// writeOutOfRangeStepSummary appends a notice to the GitHub Actions
+// step summary when the project's requires-python constraint matches
+// no supported Python and the matrix had to widen as a fallback. The
+// step summary is the user-visible surface; failures to write it are
+// silently swallowed because the notice is purely advisory.
+func writeOutOfRangeStepSummary(requiresPython string, matrix []string) {
 	path := os.Getenv("GITHUB_STEP_SUMMARY")
 	if path == "" {
 		return
@@ -241,8 +217,11 @@ func writeEOLStepSummary(eolHits []string, action string) {
 		return
 	}
 	defer func() { _ = f.Close() }()
-	_, _ = fmt.Fprintf(f, "### Python EOL versions %s\n\n", action)
-	_, _ = fmt.Fprintf(f, "%s\n\n", strings.Join(eolHits, ", "))
+	_, _ = fmt.Fprintf(f, "### Python requires-python out of range\n\n")
+	_, _ = fmt.Fprintf(f, "Project declared `requires-python = %q`, which matches no "+
+		"Python version supported by this action. The build matrix was widened to "+
+		"the supported set so the workflow can proceed:\n\n%s\n\n",
+		requiresPython, strings.Join(matrix, ", "))
 }
 
 // compareVersionStrings is a local copy of the major.minor comparator;

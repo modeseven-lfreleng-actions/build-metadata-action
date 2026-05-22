@@ -27,7 +27,6 @@ import (
 	_ "github.com/lfreleng-actions/build-metadata-action/internal/extractor/javascript"
 	_ "github.com/lfreleng-actions/build-metadata-action/internal/extractor/julia"
 	_ "github.com/lfreleng-actions/build-metadata-action/internal/extractor/php"
-	_ "github.com/lfreleng-actions/build-metadata-action/internal/extractor/python"
 	python "github.com/lfreleng-actions/build-metadata-action/internal/extractor/python"
 	_ "github.com/lfreleng-actions/build-metadata-action/internal/extractor/ruby"
 	_ "github.com/lfreleng-actions/build-metadata-action/internal/extractor/rust"
@@ -153,29 +152,35 @@ func main() {
 	validateOutput := action.GetInput("validate_output") != "false"
 	exportEnvVars := action.GetInput("export_env_vars") == "true"
 
-	// Configure the Python extractor policy from action inputs. The
-	// policy is package-scoped in `internal/extractor/python` because
-	// the Extractor.Extract interface has a fixed signature; setting it
-	// here before invoking the extractor (which happens further down)
-	// is the canonical wiring point.
+	// Parse the Python extractor inputs up front (cheap string/int
+	// handling, no network). Actual policy resolution -- which may
+	// reach out to endoflife.date in online mode -- is deferred until
+	// after project type detection so we only pay that latency cost
+	// for projects that will actually invoke the Python extractor.
+	//
+	// The fallback values below MUST stay aligned with the defaults
+	// declared in `action.yaml` for the corresponding inputs. We treat
+	// `action.yaml` as the single source of truth for user-facing
+	// defaults; the values here are only consulted when the action is
+	// invoked outside of GitHub Actions (e.g. local CLI debugging) or
+	// when the supplied input is unparsable.
+	const (
+		defaultPythonEOLTimeoutSeconds = 5 // matches action.yaml
+		defaultPythonEOLMaxRetries     = 2 // matches action.yaml
+	)
 	pythonOffline := action.GetInput("python_offline_mode") == "true"
-	pythonBehaviour := action.GetInput("python_eol_behaviour")
-	if pythonBehaviour == "" {
-		pythonBehaviour = python.EOLBehaviourWarn
-	}
-	pythonTimeout := 5 * time.Second
+	pythonTimeout := time.Duration(defaultPythonEOLTimeoutSeconds) * time.Second
 	if raw := action.GetInput("python_eol_timeout"); raw != "" {
 		if parsed, perr := strconv.Atoi(raw); perr == nil && parsed > 0 {
 			pythonTimeout = time.Duration(parsed) * time.Second
 		}
 	}
-	pythonRetries := 2
+	pythonRetries := defaultPythonEOLMaxRetries
 	if raw := action.GetInput("python_eol_max_retries"); raw != "" {
 		if parsed, perr := strconv.Atoi(raw); perr == nil && parsed >= 0 {
 			pythonRetries = parsed
 		}
 	}
-	python.SetActivePolicy(python.ResolvePolicy(pythonOffline, pythonBehaviour, pythonTimeout, pythonRetries))
 
 	// Initialize metadata
 	metadata := &Metadata{
@@ -228,6 +233,21 @@ func main() {
 		action.Infof("Detected project type: %s", projectType)
 	} else {
 		fmt.Printf("Detected project type: %s\n", projectType)
+	}
+
+	// Configure the Python extractor policy from action inputs. The
+	// policy is package-scoped in `internal/extractor/python` because
+	// the Extractor.Extract interface has a fixed signature; setting
+	// it here before invoking the extractor is the canonical wiring
+	// point.
+	//
+	// Deferred until after project type detection so that non-Python
+	// projects do not pay the endoflife.date network round-trip (and
+	// don't surface unrelated EOL-fetch warnings) just to satisfy
+	// defaults they will never use.
+	isPythonProject := normalizeProjectTypeToLanguage(projectType) == "python"
+	if isPythonProject {
+		python.SetActivePolicy(python.ResolvePolicy(pythonOffline, pythonTimeout, pythonRetries))
 	}
 
 	// Extract version information

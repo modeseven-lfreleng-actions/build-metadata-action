@@ -31,7 +31,6 @@ func withOfflinePolicy(t *testing.T) {
 	prev := ActivePolicy()
 	SetActivePolicy(&Policy{
 		Offline:      true,
-		Behaviour:    EOLBehaviourWarn,
 		SupportedSet: append([]string(nil), supportedPythonVersions...),
 		EOLVersions:  map[string]bool{},
 	})
@@ -64,7 +63,7 @@ func TestConstraintForms_PyProject(t *testing.T) {
 		{
 			name:     "compatible release without patch (~=3.11)",
 			requires: "~=3.11",
-			matrix:   []string{"3.11"},
+			matrix:   []string{"3.11", "3.12", "3.13", "3.14"},
 		},
 		{
 			name:     "compatible release with patch (~=3.11.5)",
@@ -240,7 +239,7 @@ func TestConstraintForms_SetupPy(t *testing.T) {
 			name: "tilde with single quotes",
 			setup: "from setuptools import setup\n" +
 				"setup(name='tilde-pkg', version='1.0', python_requires='~=3.11')\n",
-			matrix: []string{"3.11"},
+			matrix: []string{"3.11", "3.12", "3.13", "3.14"},
 		},
 		{
 			name: "exact with double quotes",
@@ -278,9 +277,12 @@ func TestConstraintForms_SetupPy(t *testing.T) {
 
 // TestConstraintForms_OutOfRangeResolution covers the shell action's
 // "no matching versions" cases: a constraint that resolves to an empty
-// matrix after intersecting with supported versions must fall back to
-// the static supported set (so consumers always get a runnable matrix)
-// and surface that fact via the source taxonomy.
+// matrix after intersecting with supported versions falls back to the
+// static supported set (so consumers always get a runnable matrix) AND
+// surfaces the situation via `requires_python_source =
+// "out-of-range-fallback"` plus a ::warning::, so downstream callers
+// can detect that the matrix is wider than the project actually
+// requested.
 func TestConstraintForms_OutOfRangeResolution(t *testing.T) {
 	withOfflinePolicy(t)
 	pyproject := "[project]\n" +
@@ -298,10 +300,13 @@ func TestConstraintForms_OutOfRangeResolution(t *testing.T) {
 	require.NoError(t, err)
 
 	got, _ := metadata.LanguageSpecific["version_matrix"].([]string)
-	// When the constraint is unsatisfiable against the supported set,
-	// `generatePythonVersionMatrix` falls back to the supplied
-	// supported set so consumers receive a non-empty matrix.
+	// `>=4.0` matches no supported Python; the matrix widens to the
+	// policy's supported set rather than emitting an unrunnable empty
+	// matrix.
 	assert.Equal(t, supportedPythonVersions, got)
+	assert.Equal(t, "out-of-range-fallback",
+		metadata.LanguageSpecific["requires_python_source"],
+		"source must record that the matrix was widened beyond the project's constraint")
 }
 
 // TestConstraintForms_PoetryCaretBeatsRequiresPython covers a real-world
