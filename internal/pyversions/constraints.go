@@ -4,11 +4,21 @@
 package pyversions
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 )
+
+// ErrNoVersionsMatch is returned by ResolveVersions when the supplied
+// constraint parses cleanly but no supported version satisfies it
+// (e.g. `<3.10` against a 3.10+ supported set, or `>=4.0` against a
+// 3.x-only set). Callers can detect this with `errors.Is(err,
+// ErrNoVersionsMatch)` and react explicitly (typically by widening the
+// matrix and tagging the source as `out-of-range-fallback`) instead of
+// silently treating the case as a parse error.
+var ErrNoVersionsMatch = errors.New("no versions match the constraint")
 
 // Constraint represents a single version constraint
 type Constraint struct {
@@ -107,6 +117,15 @@ func NormalizeConstraint(constraint string) string {
 	}
 
 	// Handle compatible release with patch: ~=3.10.1 -> >=3.10,<3.11
+	//
+	// Strict PEP 440 normalisation would emit `>=3.10.1,<3.11` and so
+	// would exclude a `3.10` matrix slot (because 3.10 < 3.10.1 in a
+	// proper comparator). build-metadata-action operates at major.minor
+	// granularity (matrix entries are `3.10`, `3.11`, ...); we
+	// intentionally drop the patch component from the lower bound so
+	// that `~=3.10.1` continues to match the `3.10` runner slot, which
+	// in practice resolves to the latest 3.10.x available. The 3-component
+	// upper bound (next minor) is preserved unchanged.
 	if re := regexp.MustCompile(`^~=(\d+)\.(\d+)\.(\d+)$`); re.MatchString(constraint) {
 		matches := re.FindStringSubmatch(constraint)
 		if len(matches) == 4 {
@@ -117,14 +136,16 @@ func NormalizeConstraint(constraint string) string {
 		}
 	}
 
-	// Handle compatible release: ~=3.10 -> >=3.10,<3.11
+	// Handle compatible release without patch: ~=3.10 -> >=3.10,<4.0
+	// (per PEP 440 the 2-component form is bounded by the next MAJOR;
+	// previously incorrectly bounded by the next minor which produced
+	// matrices that were too restrictive for valid requires-python specs.)
 	if re := regexp.MustCompile(`^~=(\d+)\.(\d+)$`); re.MatchString(constraint) {
 		matches := re.FindStringSubmatch(constraint)
 		if len(matches) == 3 {
-			major := matches[1]
-			minor, _ := strconv.Atoi(matches[2])
-			nextMinor := minor + 1
-			return fmt.Sprintf(">=%s.%d,<%s.%d", major, minor, major, nextMinor)
+			major, _ := strconv.Atoi(matches[1])
+			nextMajor := major + 1
+			return fmt.Sprintf(">=%s.%s,<%d.0", matches[1], matches[2], nextMajor)
 		}
 	}
 
@@ -282,7 +303,7 @@ func ResolveVersions(requiresPython string, supportedVersions []string) ([]strin
 	}
 
 	if len(filtered) == 0 {
-		return nil, fmt.Errorf("no versions match the constraint '%s'", requiresPython)
+		return nil, fmt.Errorf("%w: %q", ErrNoVersionsMatch, requiresPython)
 	}
 
 	return filtered, nil

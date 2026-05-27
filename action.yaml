@@ -71,6 +71,33 @@ inputs:
     required: false
     default: "false"
 
+  # ===================================================================
+  # Python-specific inputs (consumed by the Python extractor only)
+  # ===================================================================
+  python_offline_mode:
+    description: >-
+      When 'true', the Python extractor skips the live endoflife.date
+      consultation and uses the action's static supported-version list
+      (3.10 through 3.14 at the time of writing). Useful for hermetic
+      builds or when the runner has no outbound network access. Default
+      'false' so the extractor benefits from live EOL data.
+    required: false
+    default: "false"
+
+  python_eol_timeout:
+    description: "endoflife.date HTTP timeout in seconds (online mode only)"
+    required: false
+    default: "5"
+
+  python_eol_max_retries:
+    description: >-
+      endoflife.date HTTP retry budget (online mode only). Set to '0'
+      to opt out of retries entirely (a single attempt with no retry
+      on failure). Values are integers; negative values are treated
+      as the documented default ('2').
+    required: false
+    default: "2"
+
 outputs:
   # Complete Metadata Outputs
   metadata_json:
@@ -206,11 +233,25 @@ outputs:
 
   python_requires_python_source:
     description: >-
-      Source from which the supported-Python-version list was derived:
-      "classifiers" when python_requires was absent but trove classifiers
-      supplied the matrix, "fallback" when the action could not derive a
-      matrix from project metadata at all and resorted to its default
-      list, or empty when requires-python was used directly.
+      Source from which the supported-Python-version list was derived.
+      One of:
+        "requires-python" - derived from [project].requires-python
+          (pyproject) or python_requires (setup.cfg / setup.py);
+        "classifiers" - derived from PEP 301 trove classifiers;
+        "poetry-dependencies" - derived from
+          [tool.poetry.dependencies].python in pyproject.toml;
+        "static-fallback" - no version signal was found and the action
+          fell back to its hard-coded supported set;
+        "out-of-range-fallback" - the constraint parsed cleanly but
+          matched no Python version supported by this action (e.g.
+          requires-python = ">=4.0"); the action widened the matrix to
+          the supported set so the workflow could proceed and emitted a
+          ::warning:: plus a $GITHUB_STEP_SUMMARY entry;
+        "parse-error-fallback" - the constraint failed to parse (e.g.
+          a malformed PEP 440 specifier); the action widened the matrix
+          to the supported set as a defensive fallback and emitted a
+          ::warning:: so the user sees the parse failure;
+        empty - the extractor was not invoked (non-Python project).
     value: ${{ steps.extract.outputs.python_requires_python_source }}
 
   python_version_unresolved:
@@ -224,6 +265,33 @@ outputs:
       Source from which the dependency list was loaded (typically
       "requirements.txt" for projects that delegate install_requires).
     value: ${{ steps.extract.outputs.python_dependencies_source }}
+
+  python_eol_versions:
+    description: >-
+      Space-separated list of Python versions in the resolved matrix
+      that the live endoflife.date API marks as end-of-life. Versions
+      below the action's baseline floor (see pyversions.Baseline()) can
+      never appear here because they are not in the supported set in
+      the first place; this output surfaces matrix versions that have
+      reached EOL since they entered the supported set. Empty when
+      offline mode is selected, when the live API is unreachable, or
+      when no EOL version intersects the matrix. Consumers (typically
+      python-build-action) can branch on this to warn, strip, or fail
+      their own build steps.
+    value: ${{ steps.extract.outputs.python_eol_versions }}
+
+  python_eol_versions_present:
+    description: >-
+      "true" when python_eol_versions is non-empty (one or more EOL
+      versions are in the resolved matrix); "false" otherwise. Provided
+      as a stable boolean for workflow `if:` predicates so consumers do
+      not need to test the string for emptiness. Empty (not "false")
+      when the Python extractor is not invoked -- e.g. for non-Python
+      projects -- because `cmd/build-metadata/main.go` only emits
+      `python_*` outputs for the detected language. Consumers running
+      against mixed-language repos should therefore default to
+      treating an empty value as "no EOL hits".
+    value: ${{ steps.extract.outputs.python_eol_versions_present }}
 
   python_project_match_package:
     description: "Whether Python project name matches package name"
@@ -341,6 +409,14 @@ runs:
         INPUT_VALIDATE_OUTPUT: ${{ inputs.validate_output }}
         INPUT_STRICT_VALIDATION: ${{ inputs.strict_validation }}
         INPUT_EXPORT_ENV_VARS: ${{ inputs.export_env_vars }}
+        # Python-specific extractor inputs. The Go binary reads these
+        # via go-githubactions which expects INPUT_* environment
+        # variables. Without these mappings the user-supplied values
+        # would be silently ignored and the extractor would always use
+        # its built-in defaults.
+        INPUT_PYTHON_OFFLINE_MODE: ${{ inputs.python_offline_mode }}
+        INPUT_PYTHON_EOL_TIMEOUT: ${{ inputs.python_eol_timeout }}
+        INPUT_PYTHON_EOL_MAX_RETRIES: ${{ inputs.python_eol_max_retries }}
       run: |
         # This action requires the Go binary to be built
         # In production, this would be pre-built or use Docker

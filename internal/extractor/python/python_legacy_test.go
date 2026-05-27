@@ -68,16 +68,18 @@ func TestLegacy_PbrSetupCfg(t *testing.T) {
 	assert.Equal(t, true, metadata.LanguageSpecific["version_unresolved"])
 
 	// No python_requires, no version classifiers => fallback matrix.
-	// The fallback deliberately selects the OLDEST supported Python so
-	// legacy projects (such as this PBR/setup.cfg shape) are not built
-	// against the newest interpreter they were never validated against.
+	// The fallback selects the LATEST supported Python so the
+	// `python_build_version` output matches the action.yaml contract
+	// ("Recommended Python version for building (latest from matrix)").
+	// The constraint-derived path uses the same selection, so all matrix
+	// emission paths agree on which version is recommended for builds.
 	assert.Equal(t, true, metadata.LanguageSpecific["requires_python_fallback"])
 	buildVersion, _ := metadata.LanguageSpecific["build_version"].(string)
 	assert.NotEmpty(t, buildVersion)
 	fallbackMatrix, _ := metadata.LanguageSpecific["version_matrix"].([]string)
 	require.NotEmpty(t, fallbackMatrix, "fallback matrix must be populated")
-	assert.Equal(t, fallbackMatrix[0], buildVersion,
-		"fallback build_version must be the OLDEST entry in the matrix")
+	assert.Equal(t, fallbackMatrix[len(fallbackMatrix)-1], buildVersion,
+		"fallback build_version must be the LATEST entry in the matrix (action.yaml contract)")
 
 	// requirements.txt should have been picked up as the dependency list
 	// because install_requires is absent from setup.cfg.
@@ -295,14 +297,14 @@ func TestLegacy_BareSetupPyFallback(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, true, metadata.LanguageSpecific["requires_python_fallback"])
-	assert.Equal(t, "fallback", metadata.LanguageSpecific["requires_python_source"],
-		"fallback-derived matrices must surface a 'fallback' source so consumers can distinguish them from classifier-derived or requires-python-derived matrices")
+	assert.Equal(t, "static-fallback", metadata.LanguageSpecific["requires_python_source"],
+		"fallback-derived matrices must surface 'static-fallback' so consumers can distinguish them from classifier-derived or requires-python-derived matrices")
 	buildVersion, _ := metadata.LanguageSpecific["build_version"].(string)
 	assert.NotEmpty(t, buildVersion)
 	fallbackMatrix, _ := metadata.LanguageSpecific["version_matrix"].([]string)
 	require.NotEmpty(t, fallbackMatrix, "fallback matrix must be populated")
-	assert.Equal(t, fallbackMatrix[0], buildVersion,
-		"fallback build_version must be the OLDEST supported Python version")
+	assert.Equal(t, fallbackMatrix[len(fallbackMatrix)-1], buildVersion,
+		"fallback build_version must be the LATEST supported Python version (action.yaml contract)")
 	matrixJSON, _ := metadata.LanguageSpecific["matrix_json"].(string)
 	assert.Contains(t, matrixJSON, "python-version")
 }
@@ -357,8 +359,8 @@ func TestLegacy_PyProjectWithoutRequiresPythonFallback(t *testing.T) {
 	assert.NotEmpty(t, metadata.LanguageSpecific["build_version"])
 	fallbackMatrix, _ := metadata.LanguageSpecific["version_matrix"].([]string)
 	require.NotEmpty(t, fallbackMatrix, "fallback matrix must be populated")
-	assert.Equal(t, fallbackMatrix[0], metadata.LanguageSpecific["build_version"],
-		"fallback build_version must be the OLDEST supported Python version")
+	assert.Equal(t, fallbackMatrix[len(fallbackMatrix)-1], metadata.LanguageSpecific["build_version"],
+		"fallback build_version must be the LATEST supported Python version (action.yaml contract)")
 }
 
 // TestLegacy_ParseSetupCfgContinuationLines verifies the new INI parser
@@ -400,13 +402,13 @@ func TestLegacy_DerivePythonVersionsFromClassifiers(t *testing.T) {
 	input := []string{
 		"Programming Language :: Python :: 3",
 		"Programming Language :: Python :: 3.11",
-		"Programming Language :: Python :: 3.9",
+		"Programming Language :: Python :: 3.10",
 		"Programming Language :: Python :: 3.11", // duplicate
 		"Operating System :: OS Independent",
 		"Programming Language :: Python :: 3 :: Only",
 	}
 	result := derivePythonVersionsFromClassifiers(input)
-	assert.Equal(t, []string{"3.9", "3.11"}, result)
+	assert.Equal(t, []string{"3.10", "3.11"}, result)
 }
 
 // TestLegacy_DetectDynamicProviderFromSetupPy covers each provider branch.
@@ -687,10 +689,14 @@ func TestLegacy_SetupPyScmNoVersionIsUnresolved(t *testing.T) {
 	assert.Equal(t, true, metadata.LanguageSpecific["version_unresolved"])
 }
 
-// TestLegacy_ClassifierFiltersEolVersions confirms that EOL Python
-// versions (2.7, 3.6, 3.7, 3.8) declared in trove classifiers are
-// dropped, leaving only the actively supported set (3.9+).
-func TestLegacy_ClassifierFiltersEolVersions(t *testing.T) {
+// TestLegacy_ClassifierFiltersOutOfRangeVersions confirms that Python
+// versions declared in trove classifiers that fall outside the active
+// policy's SupportedSet (in the default offline policy: anything below
+// the baseline floor, which today excludes 2.x and 3.6-3.9) are filtered
+// out of the classifier-derived matrix. EOL filtering proper is handled
+// separately by the policy and surfaced via the `python_eol_versions`
+// outputs; this test covers the supported-range filter only.
+func TestLegacy_ClassifierFiltersOutOfRangeVersions(t *testing.T) {
 	input := []string{
 		"Programming Language :: Python :: 2",
 		"Programming Language :: Python :: 2.7",
@@ -698,11 +704,12 @@ func TestLegacy_ClassifierFiltersEolVersions(t *testing.T) {
 		"Programming Language :: Python :: 3.7",
 		"Programming Language :: Python :: 3.8",
 		"Programming Language :: Python :: 3.9",
+		"Programming Language :: Python :: 3.10",
 		"Programming Language :: Python :: 3.11",
 	}
 	result := derivePythonVersionsFromClassifiers(input)
-	assert.Equal(t, []string{"3.9", "3.11"}, result,
-		"EOL Python versions must be filtered out of classifier-derived matrices")
+	assert.Equal(t, []string{"3.10", "3.11"}, result,
+		"classifier-derived matrices must drop versions outside the active policy's SupportedSet")
 }
 
 // TestLegacy_SetupPyPbrFalsePositive guards against the regex-prefix
@@ -807,4 +814,86 @@ func TestLegacy_PyProjectClassifierMatrixPropagates(t *testing.T) {
 		"requires_python_source must reflect that the matrix came from classifiers")
 	assert.NotEqual(t, true, metadata.LanguageSpecific["requires_python_fallback"],
 		"the classifier-derived matrix must win over the guessed fallback matrix")
+}
+
+// TestLegacy_PoetryDependenciesPython covers Poetry projects that omit a
+// PEP 621 `[project]` table entirely and express the Python constraint
+// in `[tool.poetry.dependencies].python`. The matrix generator must use
+// this string just as it would `[project].requires-python`, and surface
+// `poetry-dependencies` as the requires_python_source.
+func TestLegacy_PoetryDependenciesPython(t *testing.T) {
+	pyproject := "[tool.poetry]\n" +
+		"name = \"poetry-only\"\n" +
+		"version = \"0.1.0\"\n" +
+		"description = \"Poetry project with no [project] table\"\n" +
+		"\n" +
+		"[tool.poetry.dependencies]\n" +
+		"python = \"^3.11\"\n"
+
+	tmpDir := createTempProject(t, map[string]string{"pyproject.toml": pyproject})
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	extractor := NewExtractor()
+	metadata, err := extractor.Extract(tmpDir)
+	require.NoError(t, err)
+
+	assert.Equal(t, "^3.11", metadata.LanguageSpecific["requires_python"],
+		"requires_python must mirror tool.poetry.dependencies.python")
+	assert.Equal(t, "poetry-dependencies", metadata.LanguageSpecific["requires_python_source"],
+		"requires_python_source must signal that the matrix was derived from poetry deps")
+	matrix, ok := metadata.LanguageSpecific["version_matrix"].([]string)
+	require.True(t, ok, "version_matrix must be generated from poetry dependencies")
+	assert.Equal(t, []string{"3.11", "3.12", "3.13", "3.14"}, matrix)
+	assert.Equal(t, "3.14", metadata.LanguageSpecific["build_version"],
+		"build_version must be the newest entry in the resolved matrix")
+	assert.NotEqual(t, true, metadata.LanguageSpecific["requires_python_fallback"],
+		"poetry-derived matrices must not be flagged as fallback guesses")
+}
+
+// TestSource_RequiresPython_FromPyProject asserts that a PEP 621
+// `[project].requires-python` declaration sets requires_python_source to
+// "requires-python" so consumers can tell it apart from classifier or
+// fallback derivation.
+func TestSource_RequiresPython_FromPyProject(t *testing.T) {
+	pyproject := "[project]\n" +
+		"name = \"src-pyproject\"\n" +
+		"version = \"1.0.0\"\n" +
+		"requires-python = \">=3.11\"\n"
+
+	tmpDir := createTempProject(t, map[string]string{"pyproject.toml": pyproject})
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	metadata, err := NewExtractor().Extract(tmpDir)
+	require.NoError(t, err)
+	assert.Equal(t, "requires-python", metadata.LanguageSpecific["requires_python_source"])
+}
+
+// TestSource_RequiresPython_FromSetupCfg asserts that the setup.cfg
+// `python_requires` path likewise sets requires_python_source.
+func TestSource_RequiresPython_FromSetupCfg(t *testing.T) {
+	setupCfg := "[metadata]\n" +
+		"name = src-cfg\n" +
+		"version = 1.0.0\n" +
+		"python_requires = >=3.11\n"
+
+	tmpDir := createTempProject(t, map[string]string{"setup.cfg": setupCfg})
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	metadata, err := NewExtractor().Extract(tmpDir)
+	require.NoError(t, err)
+	assert.Equal(t, "requires-python", metadata.LanguageSpecific["requires_python_source"])
+}
+
+// TestSource_RequiresPython_FromSetupPy asserts that the setup.py
+// `python_requires=` keyword likewise sets requires_python_source.
+func TestSource_RequiresPython_FromSetupPy(t *testing.T) {
+	setupPy := "from setuptools import setup\n" +
+		"setup(name='src-py', version='1.0.0', python_requires='>=3.11')\n"
+
+	tmpDir := createTempProject(t, map[string]string{"setup.py": setupPy})
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	metadata, err := NewExtractor().Extract(tmpDir)
+	require.NoError(t, err)
+	assert.Equal(t, "requires-python", metadata.LanguageSpecific["requires_python_source"])
 }

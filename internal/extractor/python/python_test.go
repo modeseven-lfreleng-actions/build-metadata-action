@@ -120,7 +120,7 @@ build-backend = "setuptools.build_meta"
 	matrix, ok := metadata.LanguageSpecific["version_matrix"].([]string)
 	require.True(t, ok)
 	assert.NotEmpty(t, matrix)
-	assert.Contains(t, matrix, "3.9")
+	assert.Contains(t, matrix, "3.10")
 
 	// Build version
 	buildVersion, ok := metadata.LanguageSpecific["build_version"].(string)
@@ -325,12 +325,12 @@ func TestGeneratePythonVersionMatrix(t *testing.T) {
 		{
 			name:           ">=3.8",
 			requiresPython: ">=3.8",
-			expected:       []string{"3.9", "3.10", "3.11", "3.12", "3.13", "3.14"},
+			expected:       []string{"3.10", "3.11", "3.12", "3.13", "3.14"},
 		},
 		{
 			name:           ">=3.9",
 			requiresPython: ">=3.9",
-			expected:       []string{"3.9", "3.10", "3.11", "3.12", "3.13", "3.14"},
+			expected:       []string{"3.10", "3.11", "3.12", "3.13", "3.14"},
 		},
 		{
 			name:           ">=3.10",
@@ -340,7 +340,7 @@ func TestGeneratePythonVersionMatrix(t *testing.T) {
 		{
 			name:           "~=3.9",
 			requiresPython: "~=3.9",
-			expected:       []string{"3.9", "3.10", "3.11", "3.12", "3.13", "3.14"},
+			expected:       []string{"3.10", "3.11", "3.12", "3.13", "3.14"},
 		},
 		{
 			name:           "<3.13,>=3.11",
@@ -355,18 +355,63 @@ func TestGeneratePythonVersionMatrix(t *testing.T) {
 		{
 			name:           ">=3.9,<3.11",
 			requiresPython: ">=3.9,<3.11",
-			expected:       []string{"3.9", "3.10"},
+			expected:       []string{"3.10"},
+		},
+		{
+			name:           ">=3.10,<=3.12",
+			requiresPython: ">=3.10,<=3.12",
+			expected:       []string{"3.10", "3.11", "3.12"},
+		},
+		{
+			name:           ">=3.9,<=3.11 (legacy min branch, inclusive max)",
+			requiresPython: ">=3.9,<=3.11",
+			expected:       []string{"3.10", "3.11"},
+		},
+		{
+			name:           ">=3.10,<=3.12,<3.11 (tightest bound wins)",
+			requiresPython: ">=3.10,<=3.12,<3.11",
+			expected:       []string{"3.10"},
+		},
+		{
+			name:           ">=3.10,<=3.12,<3.12 (tie -> exclusive wins)",
+			requiresPython: ">=3.10,<=3.12,<3.12",
+			expected:       []string{"3.10", "3.11"},
 		},
 		{
 			name:           "empty",
 			requiresPython: "",
-			expected:       []string{"3.9", "3.10", "3.11", "3.12", "3.13", "3.14"},
+			expected:       []string{"3.10", "3.11", "3.12", "3.13", "3.14"},
+		},
+		{
+			name:           ">=3.10,!=3.11",
+			requiresPython: ">=3.10,!=3.11",
+			expected:       []string{"3.10", "3.12", "3.13", "3.14"},
+		},
+		{
+			name:           "==3.12",
+			requiresPython: "==3.12",
+			expected:       []string{"3.12"},
+		},
+		{
+			name:           "^3.11 (poetry caret)",
+			requiresPython: "^3.11",
+			expected:       []string{"3.11", "3.12", "3.13", "3.14"},
+		},
+		{
+			name:           "==3.10.* (wildcard)",
+			requiresPython: "==3.10.*",
+			expected:       []string{"3.10"},
+		},
+		{
+			name:           ">=3.10,<3.13,!=3.11",
+			requiresPython: ">=3.10,<3.13,!=3.11",
+			expected:       []string{"3.10", "3.12"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := generatePythonVersionMatrix(tt.requiresPython)
+			result, _ := generatePythonVersionMatrix(tt.requiresPython, nil)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -540,7 +585,7 @@ setup(
 	matrixJSON, ok := metadata.LanguageSpecific["matrix_json"].(string)
 	require.True(t, ok, "matrix_json should be generated from requires_python")
 	assert.Contains(t, matrixJSON, "python-version")
-	assert.Contains(t, matrixJSON, "3.9")
+	assert.NotContains(t, matrixJSON, "3.9")
 	assert.Contains(t, matrixJSON, "3.10")
 	assert.Contains(t, matrixJSON, "3.11")
 	assert.Contains(t, matrixJSON, "3.12")
@@ -555,7 +600,7 @@ setup(
 	// Version matrix should be set
 	versionMatrix, ok := metadata.LanguageSpecific["version_matrix"].([]string)
 	require.True(t, ok, "version_matrix should be set")
-	assert.Equal(t, []string{"3.9", "3.10", "3.11", "3.12", "3.13", "3.14"}, versionMatrix)
+	assert.Equal(t, []string{"3.10", "3.11", "3.12", "3.13", "3.14"}, versionMatrix)
 }
 
 // Helper function to create temporary test projects
